@@ -77,6 +77,10 @@ class PTBXLDataset(object):
         self.validate_df = pd.concat([X.iloc[validation_indices], y.iloc[validation_indices]], axis=1)
         self.test_df = pd.concat([X.iloc[test_indices], y.iloc[test_indices]], axis=1)
 
+        del X
+        del y
+        del self.dataset
+
     def load_batch(self, df):
         '''
         Loads signals from the signal database into tensors
@@ -108,6 +112,8 @@ class PTBXLDataset(object):
             dataset = self.validate_df
 
         data, labels = self.load_batch(dataset)
+
+        labels = tf.cast(labels, tf.int32)
         dataset = tf.data.Dataset.from_tensor_slices((data , labels)).batch(self.cfg.BATCH_SIZE)
         
         return dataset

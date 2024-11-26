@@ -70,7 +70,9 @@ class Trainer(object):
 		y_pred_binary = tf.cast(pred >= self.threshold, tf.int32)
 
 		# Subset accuracy - proportion of samples where all the predicted labels exactly match the true labels
-		accuracy_value = tf.reduce_mean(tf.reduce_all(tf.equal(y, y_pred_binary), axis=1))
+		equal = tf.equal(y, y_pred_binary)
+		reduce = tf.reduce_all(equal, axis=1)
+		accuracy_value = tf.reduce_mean(tf.cast(reduce, tf.int32))
 
 		return accuracy_value
 
@@ -101,25 +103,49 @@ class Trainer(object):
 				step_end_time = int(round(time.time() * 1000))
 				step_time += step_end_time - step_start_time
 
-				# If it is display step find training accuracy and print it
+				#If it is display step find training accuracy and print it
 				if (step % self.cfg.DISPLAY_STEP) == 0:
 					l = self.loss('train', images, labels)
 					a = self.accuracy('train', images, labels).numpy()
-					print ('Epoch: {:03d} Step/Batch: {:09d} Step mean time: {:04d}ms \n\tLoss: {:.7f} Training accuracy: {:.4f}'.format(e, int(step), int(step_time / step), l, a))
+					tf.print('Epoch: {:03d} Step/Batch: {:09d} Step mean time: {:04d}ms \n\tLoss: {:.7f} Training accuracy: {:.4f}'.format(e, int(step), int(step_time / step), l, a)) 
 
-				# If it is Validation step find validation accuracy on valdataset and print it
+				# # If it is Validation step find validation accuracy on valdataset and print it
+				# if (step % self.cfg.VALIDATION_STEP) == 0:
+				# 	val_images, val_labels = next(self.valset)
+				# 	l = self.loss('val', val_images, val_labels)
+				# 	a = self.accuracy('val', val_images, val_labels).numpy()
+				# 	int_time = time.time() - start_time
+				# 	tf.print ('Elapsed time: {} --- Loss: {:.7f} Validation accuracy: {:.4f}'.format(ut.format_time(int_time), l, a)) 
+
+				# Validation step: Process the entire validation set
 				if (step % self.cfg.VALIDATION_STEP) == 0:
-					val_images, val_labels = tfe.Iterator(self.valset.dataset).next()
-					l = self.loss('val', val_images, val_labels)
-					a = self.accuracy('val', val_images, val_labels).numpy()
+					total_val_loss = 0.0
+					total_val_accuracy = 0.0
+					val_batches = 0
+
+					for val_images, val_labels in self.valset:
+						val_loss = self.loss('val', val_images, val_labels)
+						val_accuracy = self.accuracy('val', val_images, val_labels).numpy()
+
+						total_val_loss += val_loss.numpy()
+						total_val_accuracy += val_accuracy
+						val_batches += 1
+
+					avg_val_loss = total_val_loss / val_batches
+					avg_val_accuracy = total_val_accuracy / val_batches
+
 					int_time = time.time() - start_time
-					print ('Elapsed time: {} --- Loss: {:.7f} Validation accuracy: {:.4f}'.format(ut.format_time(int_time), l, a))
+					tf.print(
+						'Elapsed time: {} --- Validation Loss: {:.7f} Validation Accuracy: {:.4f}'.format(
+							ut.format_time(int_time), avg_val_loss, avg_val_accuracy
+						)
+					)
 
 				# If it is save step, save checkpoints
 				if (step % self.cfg.SAVE_STEP) == 0:
-					encoder_path = self.root1.save(self.checkpoint_encoder)				
+					encoder_path = self.checkpoint.save(self.checkpoint_encoder)				
 		# Save the varaibles at the end of training step
-		encoder_path = self.root1.save(self.checkpoint_encoder)				
+		encoder_path = self.checkpoint.save(self.checkpoint_encoder)				
 		print('\nVariables saved\n')
 
 
@@ -149,6 +175,7 @@ if __name__ == '__main__':
 	root_path = '/home/lrbutler/Desktop/ECGSignalClassifer/ptb-xl/'
 
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
+	train = dataset.give_data(mode='train')
 	validate = dataset.give_data(mode='validate')
 
 	# Make the Checkpoint path
@@ -156,7 +183,7 @@ if __name__ == '__main__':
 		os.makedirs(cfg.CKPT_PATH)
 
 	# Make an object of class Trainer
-	trainer = Trainer(cfg, net, validate, validate, resume)
+	trainer = Trainer(cfg=cfg, net=net, trainingset=train, valset=validate, resume=resume)
 
 	# Call train function on trainer class
 	trainer.train()

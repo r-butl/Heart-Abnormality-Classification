@@ -7,7 +7,7 @@ class Configuration(object):
 	# Train/Validate/Text Split
 	TRAIN_PERCENTAGE = 0.70
 	TEST_PERCENTAGE = 0.15
-	VALIDATE_PERCENTAGE = 0.01
+	VALIDATE_PERCENTAGE = 0.15
 
 	# Training hyperparameters
 	LEARNING_RATE = 1e-4
@@ -16,8 +16,8 @@ class Configuration(object):
 	EPOCHS = 50
 
 	# Display steps
-	DISPLAY_STEP = 100
-	VALIDATION_STEP = 500
+	DISPLAY_STEP = 5
+	VALIDATION_STEP = 10
 	SAVE_STEP = 5000
 
 	# Paths for checkpoint
