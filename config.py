@@ -1,16 +1,18 @@
 # Configuration used for training
 
 class Configuration(object):
-	DATA_PATH = 'cifar-10-batches-py'
-	# CIFAR-10 data mean
-	DATA_MEAN = [125.3, 123.0, 113.9]
-	IMG_SHAPE = [224, 224, 3]
-	NUM_CLASSES = 10
+
+	NUM_CLASSES = 5
+
+	# Train/Validate/Text Split
+	TRAIN_PERCENTAGE = 0.70
+	TEST_PERCENTAGE = 0.15
+	VALIDATE_PERCENTAGE = 0.01
 
 	# Training hyperparameters
 	LEARNING_RATE = 1e-4
 	MOMENTUM = 0.9
-	BATCH_SIZE = 128
+	BATCH_SIZE = 32
 	EPOCHS = 50
 
 	# Display steps

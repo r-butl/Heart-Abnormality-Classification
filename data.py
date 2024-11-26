@@ -1,5 +1,4 @@
 import tensorflow as tf
-import pickle
 import numpy as np
 import pandas as pd
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
@@ -16,7 +15,7 @@ def process_file(args):
     data = wfdb.rdsamp(os.path.join(root_path, os.path.splitext(f)[0]), channel_names=leads, return_res=32)[0].T
     filtered = sosfilt(sos, data, axis=-1)
     spectrogram = sft.spectrogram(filtered, axis=-1)
-    return spectrogram
+    return np.transpose(spectrogram, (1, 2, 0))
 
 # Class for creatinng dataset
 class PTBXLDataset(object):
@@ -109,7 +108,7 @@ class PTBXLDataset(object):
             dataset = self.validate_df
 
         data, labels = self.load_batch(dataset)
-        dataset = tf.data.Dataset.from_tensor_slices((data , labels))
+        dataset = tf.data.Dataset.from_tensor_slices((data , labels)).batch(self.cfg.BATCH_SIZE)
         
         return dataset
 

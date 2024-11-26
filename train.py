@@ -1,16 +1,13 @@
 import os.path
 import time
 import tensorflow as tf
-import tensorflow.contrib.eager as tfe
-from models.alexnet import AlexNet
-from data import ImageNetDataset
+import tensorflow.compat.v1 as tfe
+from alexnet import AlexNet
+from data import PTBXLDataset
 from config import Configuration
 import utils as ut
 
-
-# Enablling Eager execution
-
-tfe.enable_eager_execution()
+# tf.compat.v1.disable_eager_execution()
 
 # Train class for training the model
 class Trainer(object):
@@ -24,20 +21,33 @@ class Trainer(object):
 		self.valset = valset
 
 		# Using Adam optimizer
-		self.optimizer = tf.train.AdamOptimizer(learning_rate=self.cfg.LEARNING_RATE)
-		
+		self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.cfg.LEARNING_RATE)
+
+		# Loss function
+		#	For multilabel classification
+		self.loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=False)
+
+		# Threshold for prediction
+		self.threshold = 0.5
+
 		# Create global step
-		self.global_step = tf.train.get_or_create_global_step()
+		self.global_step = tf.Variable(0, name='global_step', dtype=tf.int64, trainable=False)
 
 		# Create checkpoint directory and save checkpoints
-		self.epoch = tfe.Variable(0, name='epoch', dtype=tf.float32, trainable=False)
+		self.epoch = tf.Variable(0, name='epoch', dtype=tf.float32, trainable=False)
 		self.checkpoint_dir = self.cfg.CKPT_PATH
 		self.checkpoint_encoder = os.path.join(self.checkpoint_dir, 'model')
-		self.root1 = tfe.Checkpoint(optimizer=self.optimizer, model=self.net, optimizer_step=tf.train.get_or_create_global_step())
+
+		self.checkpoint = tf.train.Checkpoint(optimizer=self.optimizer, model=self.net, global_step=self.global_step)
 		
 		# If resume is true continue from saved checkpoint
 		if resume:
-			self.root1.restore(tf.train.latest_checkpoint(self.checkpoint_dir))
+			latest_checkpoint = tf.train.latest_checkpoint(self.checkpoint_dir)
+			if latest_checkpoint:
+				self.checkpoint.restore(latest_checkpoint)
+				print(f"Restored checkpoint from {latest_checkpoint}")
+			else:
+				print("No checkpoint found. Starting from scratch.")
 
 	# Loss calculaions
 	def loss(self, mode, x, y):
@@ -46,7 +56,7 @@ class Trainer(object):
 		pred = self.net(x)
 
 		# Get the losses using cross entropy loss
-		loss_value = tf.losses.softmax_cross_entropy(onehot_labels=y, logits=pred)
+		loss_value = self.loss_fn(y, pred)
 
 		return loss_value
 
@@ -54,11 +64,13 @@ class Trainer(object):
 	def accuracy(self, mode, x, y):
 
 		# Get predicted labels
-		pred = tf.nn.softmax(self.net(x))
+		pred = self.net(x)
 
-		# Calculate accuracy using average of correct predictions over all data points
-		accuracy_value = tf.reduce_sum(tf.cast(tf.equal(tf.argmax(pred, axis=1, output_type=tf.int64),
-							tf.argmax(y, axis=1, output_type=tf.int64)),dtype=tf.float32)) / float(pred.shape[0].value)
+		# Set to 0 or 1 based on the threshold
+		y_pred_binary = tf.cast(pred >= self.threshold, tf.int32)
+
+		# Subset accuracy - proportion of samples where all the predicted labels exactly match the true labels
+		accuracy_value = tf.reduce_mean(tf.reduce_all(tf.equal(y, y_pred_binary), axis=1))
 
 		return accuracy_value
 
@@ -70,18 +82,21 @@ class Trainer(object):
 
 		# Run training loop for the number of epochs in configuration file
 		for e in range(int(self.epoch.numpy()), self.cfg.EPOCHS):
-			tf.assign(self.epoch, e)
+			self.epoch.assign(e)
 
 			# Run the iterator over the training dataset
-			for (batch_i, (images, labels)) in enumerate(tfe.Iterator(self.trainingset.dataset)):
-				self.global_step = tf.train.get_global_step()
+			for step, (images, labels) in enumerate(self.trainingset):
+				self.global_step.assign_add(1)
 				step = self.global_step.numpy() + 1
 
 				step_start_time = int(round(time.time() * 1000))
 
-				# Define optimizer
-				self.optimizer.minimize(lambda: self.loss('train', images, labels), global_step=self.global_step)
-
+				# The big boy training code right here
+				with tf.GradientTape() as tape:
+					loss = self.loss('train', images, labels)
+					
+				gradients = tape.gradient(loss, self.net.trainable_weights)
+				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
 
 				step_end_time = int(round(time.time() * 1000))
 				step_time += step_end_time - step_start_time
@@ -130,22 +145,18 @@ if __name__ == '__main__':
 	# If it is resume task, make it true
 	resume  = False
 
-	# Path for train dataset
-	path = 'cifar-10-batches-py/data_batch_'
+	file_name = 'updated_ptbxl_database.json'
+	root_path = '/home/lrbutler/Desktop/ECGSignalClassifer/ptb-xl/'
 
-	# Get the data set using data.py
-	trainingset = ImageNetDataset(cfg, 'train',path)
-
-	# Path for valdidation dataset
-	path_val = 'cifar-10-batches-py/data_batch_1'
-	valset = ImageNetDataset(cfg, 'val', path_val)
+	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
+	validate = dataset.give_data(mode='validate')
 
 	# Make the Checkpoint path
 	if not os.path.exists(cfg.CKPT_PATH):
 		os.makedirs(cfg.CKPT_PATH)
 
 	# Make an object of class Trainer
-	trainer = Trainer(cfg, net, trainingset, valset, resume)
+	trainer = Trainer(cfg, net, validate, validate, resume)
 
 	# Call train function on trainer class
 	trainer.train()
