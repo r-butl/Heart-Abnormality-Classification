@@ -1,8 +1,11 @@
-import os.path
+import os
 import time
 import tensorflow as tf
-import tensorflow.compat.v1 as tfe
+import datetime
+
 from alexnet import AlexNet
+from dynamic_cnn import CNN
+
 from data import PTBXLDataset
 from config import Configuration
 import utils as ut
@@ -72,15 +75,67 @@ class Trainer(object):
 		# Subset accuracy - proportion of samples where all the predicted labels exactly match the true labels
 		equal = tf.equal(y, y_pred_binary)
 		reduce = tf.reduce_all(equal, axis=1)
-		accuracy_value = tf.reduce_mean(tf.cast(reduce, tf.int32))
-
+		accuracy_value = tf.reduce_mean(tf.cast(reduce, tf.float32))
 		return accuracy_value
 
-	# Training function contining training loop
-	def train(self):
-		# Get start time
-		start_time = time.time()
-		step_time = 0.0
+	def calc_metrics_on_dataset(self, dataset):
+		total_loss = 0.0
+		total_accuracy = 0.0
+		batches = 0
+
+		for images, labels in dataset:
+			loss = self.loss('val', images, labels)
+			accuracy = self.accuracy('val', images, labels).numpy()
+
+			total_loss += loss.numpy()
+			total_accuracy += accuracy
+			batches += 1
+
+		loss = total_loss / batches
+		accuracy = total_accuracy / batches
+
+		return loss, accuracy
+	
+	def compute_metrics_and_log(self, epoch):
+
+		val_loss, val_acc = self.calc_metrics_on_dataset(self.valset)
+		train_loss, train_acc = self.calc_metrics_on_dataset(self.trainingset)
+		
+		with self.tensorboard_writer.as_default():
+			tf.print(f"train_acc {train_acc:.3f} train_loss {train_loss:.3f} val_acc {val_acc:.3f} val_loss {val_loss:.3f}")
+			tf.summary.scalar('train_acc', train_acc, step=epoch)
+			tf.summary.scalar('train_loss', train_loss, step=epoch)
+			tf.summary.scalar('val_acc', val_acc, step=epoch)
+			tf.summary.scalar('val_loss', val_loss, step=epoch)
+
+		# Return the validation loss for the early stopping function
+		return val_loss
+	
+	def check_early_stopping(self, val_loss):
+
+		if val_loss < self.best_val_loss - self.cfg.MIN_DELTA:  # Improvement threshold
+			tf.print(f"Updating val_loss {self.best_val_loss:.3f} --> {val_loss:.3f}")
+			self.best_val_loss = val_loss
+			self.patience_counter = 0
+			self.net.save_weights(self.cfg.BEST_WEIGHTS)  # Save best model
+			tf.print(f"Validation loss improved to {val_loss:.4f}. Saved model weights.")
+		else:
+			self.patience_counter += 1
+			tf.print(f"No improvement in validation loss for {self.patience_counter} epoch(s).")
+
+		# Check if patience limit is reached
+		if self.patience_counter >= self.cfg.PATIENCE:
+			tf.print(f"Early stopping triggered...")
+			return True
+		
+		return False
+
+	def train(self, tensorboard_writer):
+
+		self.tensorboard_writer = tensorboard_writer
+
+		self.best_val_loss = float('inf')
+		self.patience_counter = 0
 
 		# Run training loop for the number of epochs in configuration file
 		for e in range(int(self.epoch.numpy()), self.cfg.EPOCHS):
@@ -91,8 +146,6 @@ class Trainer(object):
 				self.global_step.assign_add(1)
 				step = self.global_step.numpy() + 1
 
-				step_start_time = int(round(time.time() * 1000))
-
 				# The big boy training code right here
 				with tf.GradientTape() as tape:
 					loss = self.loss('train', images, labels)
@@ -100,54 +153,17 @@ class Trainer(object):
 				gradients = tape.gradient(loss, self.net.trainable_weights)
 				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
 
-				step_end_time = int(round(time.time() * 1000))
-				step_time += step_end_time - step_start_time
+			# Compute metrics every epoch
+			val_loss = self.compute_metrics_and_log(epoch=e)
+			
+			if self.check_early_stopping(val_loss):
+				break
 
-				#If it is display step find training accuracy and print it
-				if (step % self.cfg.DISPLAY_STEP) == 0:
-					l = self.loss('train', images, labels)
-					a = self.accuracy('train', images, labels).numpy()
-					tf.print('Epoch: {:03d} Step/Batch: {:09d} Step mean time: {:04d}ms \n\tLoss: {:.7f} Training accuracy: {:.4f}'.format(e, int(step), int(step_time / step), l, a)) 
+		self.net.load_weights(self.cfg.BEST_WEIGHTS)
+		print("Restored model weights from the best epoch.")
 
-				# # If it is Validation step find validation accuracy on valdataset and print it
-				# if (step % self.cfg.VALIDATION_STEP) == 0:
-				# 	val_images, val_labels = next(self.valset)
-				# 	l = self.loss('val', val_images, val_labels)
-				# 	a = self.accuracy('val', val_images, val_labels).numpy()
-				# 	int_time = time.time() - start_time
-				# 	tf.print ('Elapsed time: {} --- Loss: {:.7f} Validation accuracy: {:.4f}'.format(ut.format_time(int_time), l, a)) 
-
-				# Validation step: Process the entire validation set
-				if (step % self.cfg.VALIDATION_STEP) == 0:
-					total_val_loss = 0.0
-					total_val_accuracy = 0.0
-					val_batches = 0
-
-					for val_images, val_labels in self.valset:
-						val_loss = self.loss('val', val_images, val_labels)
-						val_accuracy = self.accuracy('val', val_images, val_labels).numpy()
-
-						total_val_loss += val_loss.numpy()
-						total_val_accuracy += val_accuracy
-						val_batches += 1
-
-					avg_val_loss = total_val_loss / val_batches
-					avg_val_accuracy = total_val_accuracy / val_batches
-
-					int_time = time.time() - start_time
-					tf.print(
-						'Elapsed time: {} --- Validation Loss: {:.7f} Validation Accuracy: {:.4f}'.format(
-							ut.format_time(int_time), avg_val_loss, avg_val_accuracy
-						)
-					)
-
-				# If it is save step, save checkpoints
-				if (step % self.cfg.SAVE_STEP) == 0:
-					encoder_path = self.checkpoint.save(self.checkpoint_encoder)				
-		# Save the varaibles at the end of training step
-		encoder_path = self.checkpoint.save(self.checkpoint_encoder)				
-		print('\nVariables saved\n')
-
+		# Save the model
+		self.net.save(self.cfg.OUTPUT_MODEL)
 
 if __name__ == '__main__':
 	i = 0
@@ -164,15 +180,13 @@ if __name__ == '__main__':
 		with open(LOG_PATH,'a') as f:
 			f.write(f'{time.ctime()}: {msg}\n')
 
-	# Get the configuration
-	cfg = Configuration()
-	net = AlexNet(cfg, training=True)
-
 	# If it is resume task, make it true
 	resume  = False
 
 	file_name = 'updated_ptbxl_database.json'
 	root_path = '/home/lrbutler/Desktop/ECGSignalClassifer/ptb-xl/'
+
+	cfg = Configuration()
 
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
 	train = dataset.give_data(mode='train')
@@ -182,8 +196,33 @@ if __name__ == '__main__':
 	if not os.path.exists(cfg.CKPT_PATH):
 		os.makedirs(cfg.CKPT_PATH)
 
+	conv_configs = [
+		{'filters': 96, 'kernel_size': 11, 'strides': 4, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 128, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+	]
+
+	fc_configs = [128, 128]
+
+	net = CNN(conv_configs, fc_configs, num_classes=cfg.NUM_CLASSES, dropout_rate=cfg.DROPOUT, training=True)
+
 	# Make an object of class Trainer
 	trainer = Trainer(cfg=cfg, net=net, trainingset=train, valset=validate, resume=resume)
 
+	# Tensorboard start
+	run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+	log_dir = os.path.join(cfg.LOG_DIR, run_name)
+	tensorboard_writer = tf.summary.create_file_writer(log_dir)
+
+	with tensorboard_writer.as_default():
+		# Log conv_configs
+		conv_text = "\n".join([str(layer) for layer in conv_configs])
+		tf.summary.text("Conv Layer Configurations", conv_text, step=0)
+
+		# Log fc_configs
+		fc_text = f"Fully Connected Layers: {fc_configs}"
+		tf.summary.text("FC Layer Configurations", fc_text, step=0)
+
 	# Call train function on trainer class
-	trainer.train()
+	trainer.train(tensorboard_writer=tensorboard_writer)
