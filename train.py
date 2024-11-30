@@ -142,13 +142,16 @@ class Trainer(object):
 			self.epoch.assign(e)
 
 			# Run the iterator over the training dataset
-			for step, (images, labels) in enumerate(self.trainingset):
+			for step, (sample, labels) in enumerate(self.trainingset):
 				self.global_step.assign_add(1)
-				step = self.global_step.numpy() + 1
+				g_step = self.global_step.numpy() + 1
+
+				tf.print(sample.shape)
+				exit()
 
 				# The big boy training code right here
 				with tf.GradientTape() as tape:
-					loss = self.loss('train', images, labels)
+					loss = self.loss('train', sample, labels)
 					
 				gradients = tape.gradient(loss, self.net.trainable_weights)
 				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
@@ -189,8 +192,8 @@ if __name__ == '__main__':
 	cfg = Configuration()
 
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	train = dataset.give_data(mode='train')
-	validate = dataset.give_data(mode='validate')
+	train = dataset.read_tfrecords('train')
+	validate = dataset.read_tfrecords('validate')
 
 	# Make the Checkpoint path
 	if not os.path.exists(cfg.CKPT_PATH):
