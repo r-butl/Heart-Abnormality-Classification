@@ -1,27 +1,32 @@
 import os
 import time
-import tensorflow as tf
 import datetime
+import gc
 
-from alexnet import AlexNet
 from dynamic_cnn import CNN
+import tensorflow as tf
 
 from data import PTBXLDataset
 from config import Configuration
 import utils as ut
 
-# tf.compat.v1.disable_eager_execution()
+# Get the list of GPUs
+gpus = tf.config.list_physical_devices('GPU')
+
+if gpus:
+    try:
+        # Set memory growth to True for each GPU
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
 
 # Train class for training the model
 class Trainer(object):
 
-	def __init__(self, cfg, net, trainingset, valset, resume=False):
+	def __init__(self, cfg, net, resume=False):
 		self.cfg = cfg
 		self.net = net
-
-		# Datasets
-		self.trainingset = trainingset
-		self.valset = valset
 
 		# Using Adam optimizer
 		self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.cfg.LEARNING_RATE)
@@ -53,7 +58,7 @@ class Trainer(object):
 				print("No checkpoint found. Starting from scratch.")
 
 	# Loss calculaions
-	def loss(self, mode, x, y):
+	def compute_loss(self, mode, x, y):
 
 		# Get predicted labels
 		pred = self.net(x)
@@ -64,7 +69,7 @@ class Trainer(object):
 		return loss_value
 
 	# Accuracy Calulations
-	def accuracy(self, mode, x, y):
+	def compute_accuracy(self, mode, x, y):
 
 		# Get predicted labels
 		pred = self.net(x)
@@ -84,8 +89,8 @@ class Trainer(object):
 		batches = 0
 
 		for images, labels in dataset:
-			loss = self.loss('val', images, labels)
-			accuracy = self.accuracy('val', images, labels).numpy()
+			loss = self.compute_loss('val', images, labels)
+			accuracy = self.compute_accuracy('val', images, labels).numpy()
 
 			total_loss += loss.numpy()
 			total_accuracy += accuracy
@@ -96,29 +101,21 @@ class Trainer(object):
 
 		return loss, accuracy
 	
-	def compute_metrics_and_log(self, epoch):
-
-		val_loss, val_acc = self.calc_metrics_on_dataset(self.valset)
-		train_loss, train_acc = self.calc_metrics_on_dataset(self.trainingset)
+	def log_metric_pairs(self, loss, acc, var_name, tensorboard_writer, epoch):
 		
-		with self.tensorboard_writer.as_default():
-			tf.print(f"train_acc {train_acc:.3f} train_loss {train_loss:.3f} val_acc {val_acc:.3f} val_loss {val_loss:.3f}")
-			tf.summary.scalar('train_acc', train_acc, step=epoch)
-			tf.summary.scalar('train_loss', train_loss, step=epoch)
-			tf.summary.scalar('val_acc', val_acc, step=epoch)
-			tf.summary.scalar('val_loss', val_loss, step=epoch)
+		with tensorboard_writer.as_default():
+			tf.print(f"{var_name}_acc {acc:.3f} {var_name}_loss {loss:.3f}")
+			tf.summary.scalar(f'{var_name}_acc', acc, step=epoch)
+			tf.summary.scalar(f'{var_name}_loss', loss, step=epoch)
 
-		# Return the validation loss for the early stopping function
-		return val_loss
-	
 	def check_early_stopping(self, val_loss):
 
 		if val_loss < self.best_val_loss - self.cfg.MIN_DELTA:  # Improvement threshold
-			tf.print(f"Updating val_loss {self.best_val_loss:.3f} --> {val_loss:.3f}")
 			self.best_val_loss = val_loss
 			self.patience_counter = 0
-			self.net.save_weights(self.cfg.BEST_WEIGHTS)  # Save best model
-			tf.print(f"Validation loss improved to {val_loss:.4f}. Saved model weights.")
+			if not self.cross_validate:
+				self.net.save_weights(self.cfg.BEST_WEIGHTS)  # Save best model
+				tf.print(f"Validation loss improved to {val_loss:.4f}. Saved model weights.")
 		else:
 			self.patience_counter += 1
 			tf.print(f"No improvement in validation loss for {self.patience_counter} epoch(s).")
@@ -130,50 +127,52 @@ class Trainer(object):
 		
 		return False
 
-	def train(self, tensorboard_writer):
-
-		self.tensorboard_writer = tensorboard_writer
-
+	def train(self, trainset, valset, tensorboard_writer=None, cross_validate=False, epochs=None):
 		self.best_val_loss = float('inf')
 		self.patience_counter = 0
+		self.cross_validate = cross_validate
 
 		# Run training loop for the number of epochs in configuration file
-		for e in range(int(self.epoch.numpy()), self.cfg.EPOCHS):
+		for e in range(int(self.epoch.numpy()), self.cfg.EPOCHS if not epochs else epochs):
 			self.epoch.assign(e)
 
 			# Run the iterator over the training dataset
-			for step, (sample, labels) in enumerate(self.trainingset):
+			for step, (sample, labels) in enumerate(trainset.shuffle(buffer_size=1000)):
 				self.global_step.assign_add(1)
 				g_step = self.global_step.numpy() + 1
 
-				tf.print(sample.shape)
-				exit()
-
 				# The big boy training code right here
 				with tf.GradientTape() as tape:
-					loss = self.loss('train', sample, labels)
+					loss = self.compute_loss('train', sample, labels)
 					
 				gradients = tape.gradient(loss, self.net.trainable_weights)
 				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
 
 			# Compute metrics every epoch
-			val_loss = self.compute_metrics_and_log(epoch=e)
-			
+			val_loss, val_acc = self.calc_metrics_on_dataset(valset)
+
+			if not cross_validate and tensorboard_writer:
+				train_loss, train_acc = self.calc_metrics_on_dataset(trainset)
+				self.log_metric_pairs(loss=val_loss, acc=val_acc, var_name='validate', tensorboard_writer=tensorboard_writer, epoch=e)
+				self.log_metric_pairs(loss=train_loss, acc=train_acc, var_name='train', tensorboard_writer=tensorboard_writer, epoch=e)
+
 			if self.check_early_stopping(val_loss):
 				break
 
-		self.net.load_weights(self.cfg.BEST_WEIGHTS)
-		print("Restored model weights from the best epoch.")
+		if not cross_validate:
+			self.net.load_weights(self.cfg.BEST_WEIGHTS)
+			print("Restored model weights from the best epoch.")
 
-		# Save the model
-		self.net.save(self.cfg.OUTPUT_MODEL)
+			# Save the model
+			self.net.save(self.cfg.OUTPUT_MODEL)
+
+		return self.best_val_loss
 
 if __name__ == '__main__':
 	i = 0
 	# Make dir for logs
 	if not os.path.exists("logs"):
 		os.makedirs('logs')
-
 	while os.path.exists("logs/log%s.txt" % i):
 		i += 1
 
@@ -192,26 +191,76 @@ if __name__ == '__main__':
 	cfg = Configuration()
 
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	train = dataset.read_tfrecords('train')
-	validate = dataset.read_tfrecords('validate')
+	train = dataset.read_tfrecords(mode='train', buffer_size=64000)
 
 	# Make the Checkpoint path
 	if not os.path.exists(cfg.CKPT_PATH):
 		os.makedirs(cfg.CKPT_PATH)
 
-	conv_configs = [
-		{'filters': 96, 'kernel_size': 11, 'strides': 4, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+	configs = [
+		([
+		{'filters': 64, 'kernel_size': 5, 'strides': 2, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 512, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1}
+		],
+		[512, 256]),
+		([
+		{'filters': 64, 'kernel_size': 5, 'strides': 2, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 64, 'kernel_size': 5, 'strides': 2, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
 		{'filters': 128, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 256, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
 		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 128, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
+		{'filters': 512, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1}
+		],
+		[4096, 4096])
 	]
 
-	fc_configs = [128, 128]
+	k_folds = 5
+	dataset_size = sum(1 for _ in train)  # Calculate the total number of samples
+	fold_size = dataset_size // k_folds  # Calculate the size of each fold
+	fold_config_results = []
 
-	net = CNN(conv_configs, fc_configs, num_classes=cfg.NUM_CLASSES, dropout_rate=cfg.DROPOUT, training=True)
+	for conv_config, fc_config in configs:
+		fold_results = []
 
-	# Make an object of class Trainer
-	trainer = Trainer(cfg=cfg, net=net, trainingset=train, valset=validate, resume=resume)
+		for fold_idx in range(k_folds):
+			# Create a fresh model for each fold
+			net = CNN(conv_config, fc_config, num_classes=cfg.NUM_CLASSES, dropout_rate=cfg.DROPOUT, training=True)
+			trainer = Trainer(cfg=cfg, net=net)
+
+			# Create validation dataset for the current fold
+			val_dataset = train.skip(fold_idx * fold_size).take(fold_size)
+
+			# Create training dataset by skipping the validation fold and concatenating the rest
+			train_dataset = train.take(fold_idx * fold_size).concatenate(
+				train.skip((fold_idx + 1) * fold_size)
+			)
+
+			# Run training for this fold
+			fold_val_loss = trainer.train(trainset=train_dataset, valset=val_dataset, cross_validate=True, epochs=5)
+			tf.print(f'Cross validation fold {fold_idx} loss: {fold_val_loss}')
+			fold_results.append(fold_val_loss)
+
+			# Clean up
+			del train_dataset
+			del val_dataset
+			del net
+			del trainer
+			tf.keras.backend.clear_session()
+			gc.collect()
+
+		avg_val_loss = sum(fold_results) / len(fold_results)
+		print(f"Cross-validation average validation loss: {avg_val_loss}")
+		fold_config_results.append(((conv_config, fc_config), avg_val_loss))
+
+
+	# Best configuration
+	conv_config, fc_config = max(fold_config_results, key=lambda x: x[1])[0]
+	print(f"Best configuration:\n{conv_config}\n{fc_config}")
 
 	# Tensorboard start
 	run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -220,12 +269,17 @@ if __name__ == '__main__':
 
 	with tensorboard_writer.as_default():
 		# Log conv_configs
-		conv_text = "\n".join([str(layer) for layer in conv_configs])
+		conv_text = "\n".join([str(layer) for layer in conv_config])
 		tf.summary.text("Conv Layer Configurations", conv_text, step=0)
 
 		# Log fc_configs
-		fc_text = f"Fully Connected Layers: {fc_configs}"
+		fc_text = f"Fully Connected Layers: {fc_config}"
 		tf.summary.text("FC Layer Configurations", fc_text, step=0)
 
+	net = CNN(conv_config, fc_config, num_classes=cfg.NUM_CLASSES, dropout_rate=cfg.DROPOUT, training=True)
+	trainer = Trainer(cfg=cfg, net=net)
+
+	validate = dataset.read_tfrecords(mode='validate', buffer_size=10000)
+
 	# Call train function on trainer class
-	trainer.train(tensorboard_writer=tensorboard_writer)
+	print(trainer.train(trainset=train, valset=validate, tensorboard_writer=tensorboard_writer, cross_validate=False))

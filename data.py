@@ -43,8 +43,8 @@ class PTBXLDataset(object):
 
         # Define a spectrogram
         nperseg = fs * 1    # Length of each segment, 2 seconds in this case
-        hop = 3             # Overlap between segments, 50% hop in this case
-        w = get_window(('gaussian', 2), nperseg)
+        hop = 2             # Overlap between segments, 50% hop in this case
+        w = get_window(('gaussian', 15), nperseg)
         self.sft = ShortTimeFFT(w, hop, fs=fs, mfft=150)
 
     def design_iir_bandpass(self, lowcut, highcut, fs, order=4):
@@ -80,7 +80,6 @@ class PTBXLDataset(object):
 
         del X
         del y
-        del self.dataset
 
     def load_batch(self, df):
         '''
@@ -135,7 +134,7 @@ class PTBXLDataset(object):
                 example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
                 writer.write(example_proto.SerializeToString())
 
-    def read_tfrecords(self, mode):
+    def read_tfrecords(self, mode, buffer_size):
         
         features = {
             'sample': tf.io.FixedLenFeature([], tf.string),  
@@ -160,7 +159,7 @@ class PTBXLDataset(object):
         else:
             return
 
-        data = tf.data.TFRecordDataset(dataset)
+        data = tf.data.TFRecordDataset(dataset, buffer_size=buffer_size)
         dataset = data.map(_parse_function)
 
         return dataset
@@ -172,14 +171,14 @@ if __name__ == "__main__":
 
     dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
 
-    validate = dataset.give_raw_dataset(mode='validate')
-    dataset.write_tfrecords(validate, 'validate_dataset')
+    # validate = dataset.give_raw_dataset(mode='validate')
+    # dataset.write_tfrecords(validate, 'validate_dataset')
 
-    # train = dataset.give_raw_dataset(mode='train')
-    # dataset.write_dataset_to_tfrecords(train, 'train_dataset')
+    train = dataset.give_raw_dataset(mode='train')
+    dataset.write_tfrecords(train, 'train_dataset')
 
-    # test = dataset.give_raw_dataset(mode='test')
-    # dataset.write_dataset_to_tfrecords(test, 'test_dataset')
+    test = dataset.give_raw_dataset(mode='test')
+    dataset.write_tfrecords(test, 'test_dataset')
 
     data = dataset.read_tfrecords('validate')
 

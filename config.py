@@ -12,17 +12,25 @@ class Configuration(object):
 	# Training hyperparameters
 	LEARNING_RATE = 1e-4
 	MOMENTUM = 0.9
-	BATCH_SIZE = 32
+	BATCH_SIZE = 64
 	EPOCHS = 50
 
 	# Display steps
-	DISPLAY_STEP = 5
-	VALIDATION_STEP = 10
+	TRAIN_STEP = 10
+	VALIDATION_STEP = 50
 	SAVE_STEP = 5000
 
 	# Paths for checkpoint
 	CKPT_PATH = 'ckpt'
 	SUMMARY_PATH = 'summary'
+	LOG_DIR = 'logs'
+	BEST_WEIGHTS = 'best_weights.weights.h5'
+	OUTPUT_MODEL = 'model.keras'	
+
+	# Early Stopping Config
+	PATIENCE = 7
+	MIN_DELTA = 0.001
+	RESTORE_BEST_WEIGHTS = False
 
 	# Net architecture hyperparamaters
 	LAMBDA = 5e-4 #for weight decay
