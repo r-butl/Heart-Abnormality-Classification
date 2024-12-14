@@ -1,7 +1,6 @@
 import tensorflow as tf
 
 # Class for Alexnet model
-
 class AlexNet(tf.keras.Model):
 
 	def __init__(self, cfg, training):
@@ -14,17 +13,37 @@ class AlexNet(tf.keras.Model):
 		conv_init = tf.compat.v1.glorot_normal_initializer()
 		
 		# Adaptive height, width, and channels
-		self.conv1 = tf.keras.layers.Conv2D(96, 11, 4, 'same', activation=tf.nn.relu, kernel_initializer=conv_init)
+		self.conv1 = tf.keras.Sequential([
+			tf.keras.layers.Conv2D(96, 11, 4, 'same', kernel_initializer=conv_init),
+			tf.keras.layers.BatchNormalization(),
+			tf.keras.layers.Activation(tf.nn.relu)
+		])
 		self.pool1 = tf.keras.layers.MaxPooling2D(3, 2, 'VALID')
 
-		self.conv2 = tf.keras.layers.Conv2D(256, 5, 1, 'same', activation=tf.nn.relu, kernel_initializer=conv_init)
+		self.conv2 = tf.keras.Sequential([
+			tf.keras.layers.Conv2D(256, 5, 1, 'same', kernel_initializer=conv_init),
+			tf.keras.layers.BatchNormalization(),
+			tf.keras.layers.Activation(tf.nn.relu)
+		])
 		self.pool2 = tf.keras.layers.MaxPooling2D(3, 2, 'VALID')
 
-		self.conv3 = tf.keras.layers.Conv2D(384, 3, 1, 'same', activation=tf.nn.relu, kernel_initializer=conv_init)
+		self.conv3 = tf.keras.Sequential([
+			tf.keras.layers.Conv2D(384, 3, 1, 'same', kernel_initializer=conv_init),
+			tf.keras.layers.BatchNormalization(),
+			tf.keras.layers.Activation(tf.nn.relu)
+		])
+		self.conv4 = tf.keras.Sequential([
+			tf.keras.layers.Conv2D(384, 3, 1, 'same', kernel_initializer=conv_init),
+			tf.keras.layers.BatchNormalization(),
+			tf.keras.layers.Activation(tf.nn.relu)
+		])
 
-		self.conv4 = tf.keras.layers.Conv2D(384, 3, 1, 'same', activation=tf.nn.relu, kernel_initializer=conv_init)
-
-		self.conv5 = tf.keras.layers.Conv2D(256, 3, 1, 'same', activation=tf.nn.relu, kernel_initializer=conv_init)
+		self.conv5 = tf.keras.Sequential([
+			tf.keras.layers.Conv2D(256, 3, 1, 'same', kernel_initializer=conv_init),
+			tf.keras.layers.BatchNormalization(),
+			tf.keras.layers.Activation(tf.nn.relu)
+		])
+		
 		self.pool5 = tf.keras.layers.MaxPooling2D(3, 2, 'VALID')
 
 		# Fully connected layers
@@ -37,7 +56,7 @@ class AlexNet(tf.keras.Model):
 		self.drop2 = tf.keras.layers.Dropout(self.cfg.DROPOUT)
 
 		# Sigmoid for multilabel classification
-		self.out = tf.keras.layers.Dense(self.cfg.NUM_CLASSES, activation='sigmoid',kernel_initializer=fc_init)
+		self.out = tf.keras.layers.Dense(self.cfg.NUM_CLASSES, activation='sigmoid', kernel_initializer=fc_init)
 
 
 	def call(self, x):

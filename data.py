@@ -2,21 +2,24 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.signal import butter, sosfilt, ShortTimeFFT, get_window
+from PIL import Image
 import wfdb
 import os
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 import config
+import gc
 
 # Have to place this outside of the class inorder to use multiprocessing on it
 def process_file(args):
-    root_path, f, leads, sos, sft = args
+    index, root_path, f, leads, sos, sft = args
     data = wfdb.rdsamp(os.path.join(root_path, os.path.splitext(f)[0]), channel_names=leads, return_res=32)[0].T
     filtered = sosfilt(sos, data, axis=-1)
     spectrogram = sft.spectrogram(filtered, axis=-1)
     tensor = np.transpose(spectrogram, (1, 2, 0)).astype(np.float32)
-    return tensor
+    return [index, tensor]
 
 # Class for creatinng dataset
 class PTBXLDataset(object):
@@ -26,10 +29,10 @@ class PTBXLDataset(object):
         self.root_path = root_path  # Full path to the dataset folder
 
         self.dataset = pd.read_json(os.path.join(root_path, meta_file))
-        self.dataset = self.dataset[['filename_lr', 'filename_hr', 'MI', 'STTC', 'CD', 'HYP', 'AD']]
+        self.dataset = self.dataset[['filename_lr', 'filename_hr', 'AD']]
 
         self.leads = ['I', 'II', 'V2']
-        self.classes = ['MI', 'STTC', 'CD', 'HYP', 'AD']
+        self.classes = ['AD']
         self.sampling_rate = 100 # or 500
 
         self.storage_dir = 'ptbxl_tfrecords'
@@ -42,8 +45,8 @@ class PTBXLDataset(object):
         self.sos = self.design_iir_bandpass(lowcut, highcut, fs, order)
 
         # Define a spectrogram
-        nperseg = fs * 1    # Length of each segment, 2 seconds in this case
-        hop = 2             # Overlap between segments, 50% hop in this case
+        nperseg = fs * 1    # Length of each segment in seconds
+        hop = 2             # Similar to stride
         w = get_window(('gaussian', 15), nperseg)
         self.sft = ShortTimeFFT(w, hop, fs=fs, mfft=150)
 
@@ -57,30 +60,57 @@ class PTBXLDataset(object):
         sos = butter(order, [low, high], btype='band', output='sos')  # Second-order sections
         return sos
         
-    def create_splits(self):
-        '''
-        Uses mutlilabel stratification to split the data
-        '''
-        # Extract X and y
+    def create_splits(self, multilabel=False):
+        """
+        Creates train, validation, and test splits with stratification.
+        """
         X = self.dataset[['filename_lr', 'filename_hr']]
-        y = self.dataset[['MI', 'STTC', 'CD', 'HYP', 'AD']]
+        y = self.dataset[self.classes]
 
-        # Train/Test split
-        splitter = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=self.cfg.TEST_PERCENTAGE, random_state=0)
-        train_indices, test_indices = next(splitter.split(X, y))
+        # Choose the appropriate splitter
+        if multilabel:
+            splitter = MultilabelStratifiedShuffleSplit(
+                n_splits=1, test_size=self.cfg.TEST_PERCENTAGE, random_state=0
+            )
+        else:
+            splitter = StratifiedShuffleSplit(
+                n_splits=1, test_size=self.cfg.TEST_PERCENTAGE, random_state=0
+            )
 
-        # Train/Validation split
-        splitter = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=self.cfg.VALIDATE_PERCENTAGE / (1 - self.cfg.TEST_PERCENTAGE), random_state=0)
-        train_indices, validation_indices = next(splitter.split(X.iloc[train_indices], y.iloc[train_indices]))
+        # First, split into train+validation and test
+        train_val_indices, test_indices = next(splitter.split(X, y))
+
+        # Isolate train+validation data
+        X_train_val, y_train_val = X.iloc[train_val_indices], y.iloc[train_val_indices]
+
+        # Now split train+validation into train and validation
+        if multilabel:
+            splitter = MultilabelStratifiedShuffleSplit(
+                n_splits=1, test_size=self.cfg.VALIDATE_PERCENTAGE / (1 - self.cfg.TEST_PERCENTAGE), random_state=0
+            )
+        else:
+            splitter = StratifiedShuffleSplit(
+                n_splits=1, test_size=self.cfg.VALIDATE_PERCENTAGE / (1 - self.cfg.TEST_PERCENTAGE), random_state=0
+            )
+
+        train_indices, validation_indices = next(splitter.split(X_train_val, y_train_val))
+
+        # Map back to original indices
+        train_indices = train_val_indices[train_indices]
+        validation_indices = train_val_indices[validation_indices]
+
+        # Assertions to ensure no overlap
+        assert not set(train_indices).intersection(validation_indices), "Train and validation overlap!"
+        assert not set(train_indices).intersection(test_indices), "Train and test overlap!"
+        assert not set(validation_indices).intersection(test_indices), "Validation and test overlap!"
 
         # Assign splits
         self.train_df = pd.concat([X.iloc[train_indices], y.iloc[train_indices]], axis=1)
         self.validate_df = pd.concat([X.iloc[validation_indices], y.iloc[validation_indices]], axis=1)
         self.test_df = pd.concat([X.iloc[test_indices], y.iloc[test_indices]], axis=1)
 
-        del X
-        del y
-
+        del X, y
+        
     def load_batch(self, df):
         '''
         Loads signals from the signal database into tensors
@@ -88,12 +118,16 @@ class PTBXLDataset(object):
         df_files = df.filename_lr if self.sampling_rate == 100 else df.filename_hr
 
         args = [
-            (self.root_path, f, self.leads, self.sos, self.sft)
-            for f in df_files
+            (i, self.root_path, f, self.leads, self.sos, self.sft)
+            for i, f in enumerate(df_files)
         ]
 
         with ProcessPoolExecutor() as executor:
             data = list(tqdm(executor.map(process_file, args), total=len(df_files), desc="Processing files"))
+
+        # Ensure that the ordering of the data is correct.
+        data = sorted(data, key=lambda x: x[0])
+        data = [d[1] for d in data]
 
         labels = df[self.classes].to_numpy().astype(np.int32)
         return data, labels
@@ -102,7 +136,6 @@ class PTBXLDataset(object):
         '''
         Creates tensorflow datasets for each  train, validation, and test splits
         '''
-        self.create_splits()
 
         dataset = None
         if mode == 'train':
@@ -119,7 +152,11 @@ class PTBXLDataset(object):
         return dataset
     
     def write_tfrecords(self, dataset, file_prefix):
-        """Write data and labels to a TFRecord file."""
+        '''
+        Input:
+            dataset:        tf.Dataset of data to write.
+            file_prefix:    Name of the file to write the data.
+        '''
         filename = f'{file_prefix}.tfrecord'
         with tf.io.TFRecordWriter(filename) as writer:
             for sample, label in dataset:
@@ -134,7 +171,13 @@ class PTBXLDataset(object):
                 example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
                 writer.write(example_proto.SerializeToString())
 
-    def read_tfrecords(self, mode, buffer_size):
+    def read_tfrecords(self, file_name, buffer_size=1000):
+        '''
+        Input:
+            file_name:  File name to read records from.
+        Output:
+            dataset:    TFRecordDataset.
+        '''
         
         features = {
             'sample': tf.io.FixedLenFeature([], tf.string),  
@@ -150,19 +193,37 @@ class PTBXLDataset(object):
 
             return sample, label
         
-        if mode == 'train':
-            dataset = [os.path.join(self.storage_dir, 'train_dataset.tfrecord')]
-        elif mode == 'test':
-            dataset = [os.path.join(self.storage_dir, 'test_dataset.tfrecord')]
-        elif mode == 'validate':
-            dataset = [os.path.join(self.storage_dir, 'validate_dataset.tfrecord')]
-        else:
-            return
-
+        dataset = [file_name]
         data = tf.data.TFRecordDataset(dataset, buffer_size=buffer_size)
         dataset = data.map(_parse_function)
 
         return dataset
+    
+    def write_yolo_data(self, tensor_slices, output_dir):
+        '''
+        Input:
+            tensor_slices:  tf.Dataset of (tensor, labels)
+            output_dir:     directory to write images and labels
+        '''
+        # Create directories
+        images_dir = os.path.join(output_dir, "images")
+        labels_dir = os.path.join(output_dir, "labels")
+        os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(labels_dir, exist_ok=True)
+
+        for i, (tensor, label) in enumerate(tensor_slices):
+            # Normalize tensor to [0, 255]
+            normalized_tensor = tf.cast((tensor / tf.reduce_max(tensor)) * 255, tf.uint8)
+
+            # Save the image
+            image_path = os.path.join(images_dir, f"image{i+1}.png")
+            image = Image.fromarray(normalized_tensor.numpy())
+            image.save(image_path)
+
+            # Save the label (binary classification)
+            label_path = os.path.join(labels_dir, f"image{i+1}.txt")
+            with open(label_path, "w") as f:
+                f.write(f"{label}\n")  # YOLO expects the class index
 
 if __name__ == "__main__":
     cfg = config.Configuration()
@@ -171,18 +232,22 @@ if __name__ == "__main__":
 
     dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
 
-    # validate = dataset.give_raw_dataset(mode='validate')
-    # dataset.write_tfrecords(validate, 'validate_dataset')
+    dataset.create_splits()
+
+    validate = dataset.give_raw_dataset(mode='validate')
+    dataset.write_yolo_data(validate, 'val')
+    del validate
+    tf.keras.backend.clear_session()
+    gc.collect()
 
     train = dataset.give_raw_dataset(mode='train')
-    dataset.write_tfrecords(train, 'train_dataset')
+    dataset.write_yolo_data(train, 'train')
+    del train
+    tf.keras.backend.clear_session()
+    gc.collect()
 
     test = dataset.give_raw_dataset(mode='test')
-    dataset.write_tfrecords(test, 'test_dataset')
-
-    data = dataset.read_tfrecords('validate')
-
-    for sample, label in data.take(1):  # `take(1)` retrieves the first batch/example
-        print(f"Sample Shape: {sample.shape}")
-        print(f"Label Shape: {label.shape}")
-        
+    dataset.write_yolo_data(test, 'test')
+    del test
+    tf.keras.backend.clear_session()
+    gc.collect()

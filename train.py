@@ -2,8 +2,11 @@ import os
 import time
 import datetime
 import gc
+import itertools
 
 from dynamic_cnn import CNN
+from alexnet import AlexNet
+
 import tensorflow as tf
 
 from data import PTBXLDataset
@@ -36,46 +39,25 @@ class Trainer(object):
 		self.loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=False)
 
 		# Threshold for prediction
-		self.threshold = 0.5
+		self.threshold = cfg.THRESHOLD
 
 		# Create global step
 		self.global_step = tf.Variable(0, name='global_step', dtype=tf.int64, trainable=False)
 
-		# Create checkpoint directory and save checkpoints
-		self.epoch = tf.Variable(0, name='epoch', dtype=tf.float32, trainable=False)
-		self.checkpoint_dir = self.cfg.CKPT_PATH
-		self.checkpoint_encoder = os.path.join(self.checkpoint_dir, 'model')
-
-		self.checkpoint = tf.train.Checkpoint(optimizer=self.optimizer, model=self.net, global_step=self.global_step)
-		
-		# If resume is true continue from saved checkpoint
-		if resume:
-			latest_checkpoint = tf.train.latest_checkpoint(self.checkpoint_dir)
-			if latest_checkpoint:
-				self.checkpoint.restore(latest_checkpoint)
-				print(f"Restored checkpoint from {latest_checkpoint}")
-			else:
-				print("No checkpoint found. Starting from scratch.")
-
 	# Loss calculaions
-	def compute_loss(self, mode, x, y):
+	def compute_loss(self, x, y):
 
 		# Get predicted labels
 		pred = self.net(x)
-
-		# Get the losses using cross entropy loss
-		loss_value = self.loss_fn(y, pred)
-
+		loss_value = self.loss_fn(y, pred)	# Get the losses using cross entropy loss
 		return loss_value
 
 	# Accuracy Calulations
-	def compute_accuracy(self, mode, x, y):
+	def compute_accuracy(self, x, y):
 
 		# Get predicted labels
 		pred = self.net(x)
-
-		# Set to 0 or 1 based on the threshold
-		y_pred_binary = tf.cast(pred >= self.threshold, tf.int32)
+		y_pred_binary = tf.cast(pred >= self.threshold, tf.int32) # Set to 0 or 1 based on the threshold
 
 		# Subset accuracy - proportion of samples where all the predicted labels exactly match the true labels
 		equal = tf.equal(y, y_pred_binary)
@@ -89,8 +71,8 @@ class Trainer(object):
 		batches = 0
 
 		for images, labels in dataset:
-			loss = self.compute_loss('val', images, labels)
-			accuracy = self.compute_accuracy('val', images, labels).numpy()
+			loss = self.compute_loss(images, labels)
+			accuracy = self.compute_accuracy(images, labels).numpy()
 
 			total_loss += loss.numpy()
 			total_accuracy += accuracy
@@ -114,7 +96,7 @@ class Trainer(object):
 			self.best_val_loss = val_loss
 			self.patience_counter = 0
 			if not self.cross_validate:
-				self.net.save_weights(self.cfg.BEST_WEIGHTS)  # Save best model
+				self.net.save(self.cfg.OUTPUT_MODEL)
 				tf.print(f"Validation loss improved to {val_loss:.4f}. Saved model weights.")
 		else:
 			self.patience_counter += 1
@@ -133,8 +115,7 @@ class Trainer(object):
 		self.cross_validate = cross_validate
 
 		# Run training loop for the number of epochs in configuration file
-		for e in range(int(self.epoch.numpy()), self.cfg.EPOCHS if not epochs else epochs):
-			self.epoch.assign(e)
+		for e in range(0, self.cfg.EPOCHS if not epochs else epochs):
 
 			# Run the iterator over the training dataset
 			for step, (sample, labels) in enumerate(trainset.shuffle(buffer_size=1000)):
@@ -143,7 +124,7 @@ class Trainer(object):
 
 				# The big boy training code right here
 				with tf.GradientTape() as tape:
-					loss = self.compute_loss('train', sample, labels)
+					loss = self.compute_loss(sample, labels)
 					
 				gradients = tape.gradient(loss, self.net.trainable_weights)
 				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
@@ -159,17 +140,11 @@ class Trainer(object):
 			if self.check_early_stopping(val_loss):
 				break
 
-		if not cross_validate:
-			self.net.load_weights(self.cfg.BEST_WEIGHTS)
-			print("Restored model weights from the best epoch.")
-
-			# Save the model
-			self.net.save(self.cfg.OUTPUT_MODEL)
-
 		return self.best_val_loss
 
 if __name__ == '__main__':
 	i = 0
+
 	# Make dir for logs
 	if not os.path.exists("logs"):
 		os.makedirs('logs')
@@ -182,104 +157,87 @@ if __name__ == '__main__':
 		with open(LOG_PATH,'a') as f:
 			f.write(f'{time.ctime()}: {msg}\n')
 
-	# If it is resume task, make it true
-	resume  = False
-
 	file_name = 'updated_ptbxl_database.json'
 	root_path = '/home/lrbutler/Desktop/ECGSignalClassifer/ptb-xl/'
 
 	cfg = Configuration()
 
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	train = dataset.read_tfrecords(mode='train', buffer_size=64000)
+	train = dataset.read_tfrecords('data_1_label/train_dataset_1_label.tfrecord', buffer_size=64000)
+	cross_validate = False
 
-	# Make the Checkpoint path
-	if not os.path.exists(cfg.CKPT_PATH):
-		os.makedirs(cfg.CKPT_PATH)
+	if cross_validate:
+		batch_sizes = [32, 64, 128]
 
-	configs = [
-		([
-		{'filters': 64, 'kernel_size': 5, 'strides': 2, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 512, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1}
-		],
-		[512, 256]),
-		([
-		{'filters': 64, 'kernel_size': 5, 'strides': 2, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 64, 'kernel_size': 5, 'strides': 2, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 128, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 256, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 128, 'kernel_size': 5, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1},
-		{'filters': 512, 'kernel_size': 3, 'strides': 1, 'padding': 'same', 'pool_size': 3, 'pool_strides': 1}
-		],
-		[4096, 4096])
-	]
+		hyperparameters = list(itertools.product(batch_sizes))
 
-	k_folds = 5
-	dataset_size = sum(1 for _ in train)  # Calculate the total number of samples
-	fold_size = dataset_size // k_folds  # Calculate the size of each fold
-	fold_config_results = []
+		for p in hyperparameters:
+			tf.print(p)
 
-	for conv_config, fc_config in configs:
-		fold_results = []
+		k_folds = 5
+		dataset_size = sum(1 for _ in train)  # Calculate the total number of samples
+		fold_size = dataset_size // k_folds  # Calculate the size of each fold
+		fold_config_results = []
 
-		for fold_idx in range(k_folds):
-			# Create a fresh model for each fold
-			net = CNN(conv_config, fc_config, num_classes=cfg.NUM_CLASSES, dropout_rate=cfg.DROPOUT, training=True)
-			trainer = Trainer(cfg=cfg, net=net)
+		for parameters in hyperparameters:
+			fold_results = []
 
-			# Create validation dataset for the current fold
-			val_dataset = train.skip(fold_idx * fold_size).take(fold_size)
+			for fold_idx in range(k_folds):
+				# Create a fresh model for each fold
+				net = AlexNet(cfg=cfg, training=True)
+				trainer = Trainer(cfg=cfg, net=net)
 
-			# Create training dataset by skipping the validation fold and concatenating the rest
-			train_dataset = train.take(fold_idx * fold_size).concatenate(
-				train.skip((fold_idx + 1) * fold_size)
-			)
+				# Create validation dataset for the current fold
+				val_dataset = train.skip(fold_idx * fold_size).take(fold_size)
 
-			# Run training for this fold
-			fold_val_loss = trainer.train(trainset=train_dataset, valset=val_dataset, cross_validate=True, epochs=5)
-			tf.print(f'Cross validation fold {fold_idx} loss: {fold_val_loss}')
-			fold_results.append(fold_val_loss)
+				# Create training dataset by skipping the validation fold and concatenating the rest
+				train_dataset = train.take(fold_idx * fold_size).concatenate(
+					train.skip((fold_idx + 1) * fold_size)
+				)
 
-			# Clean up
-			del train_dataset
-			del val_dataset
-			del net
-			del trainer
-			tf.keras.backend.clear_session()
-			gc.collect()
+				# Run training for this fold
+				fold_val_loss = trainer.train(
+					trainset=train_dataset.batch(parameters[0]), 
+					valset=val_dataset.batch(parameters[0]), 
+					cross_validate=True, 
+					epochs=5
+					)
+				tf.print(f'Cross validation fold {fold_idx} loss: {fold_val_loss}')
+				fold_results.append(fold_val_loss)
 
-		avg_val_loss = sum(fold_results) / len(fold_results)
-		print(f"Cross-validation average validation loss: {avg_val_loss}")
-		fold_config_results.append(((conv_config, fc_config), avg_val_loss))
+				# Clean up
+				del train_dataset
+				del val_dataset
+				del net
+				del trainer
+				tf.keras.backend.clear_session()
+				gc.collect()
 
+			avg_val_loss = sum(fold_results) / len(fold_results)
+			print(f"Cross-validation average validation loss: {avg_val_loss}")
+			fold_config_results.append((parameters, avg_val_loss))
 
-	# Best configuration
-	conv_config, fc_config = max(fold_config_results, key=lambda x: x[1])[0]
-	print(f"Best configuration:\n{conv_config}\n{fc_config}")
+		# Best configuration
+		best_hyperparameters = max(fold_config_results, key=lambda x: x[1])
+		print(f"Best configuration:\n{best_hyperparameters}")
 
+		batch_size = best_hyperparameters[0]
+	else:
+		batch_size = 128
+	
+		
 	# Tensorboard start
 	run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 	log_dir = os.path.join(cfg.LOG_DIR, run_name)
 	tensorboard_writer = tf.summary.create_file_writer(log_dir)
 
 	with tensorboard_writer.as_default():
-		# Log conv_configs
-		conv_text = "\n".join([str(layer) for layer in conv_config])
-		tf.summary.text("Conv Layer Configurations", conv_text, step=0)
+		tf.summary.scalar("Batch Size", batch_size, step=0)
 
-		# Log fc_configs
-		fc_text = f"Fully Connected Layers: {fc_config}"
-		tf.summary.text("FC Layer Configurations", fc_text, step=0)
-
-	net = CNN(conv_config, fc_config, num_classes=cfg.NUM_CLASSES, dropout_rate=cfg.DROPOUT, training=True)
+	net = AlexNet(cfg=cfg, training=True)
 	trainer = Trainer(cfg=cfg, net=net)
 
-	validate = dataset.read_tfrecords(mode='validate', buffer_size=10000)
+	validate = dataset.read_tfrecords('data_1_label/validate_dataset_1_label.tfrecord', buffer_size=10000)
 
 	# Call train function on trainer class
-	print(trainer.train(trainset=train, valset=validate, tensorboard_writer=tensorboard_writer, cross_validate=False))
+	print(trainer.train(trainset=train.batch(batch_size), valset=validate.batch(batch_size), cross_validate=False, tensorboard_writer=tensorboard_writer, epochs=cfg.EPOCHS))
