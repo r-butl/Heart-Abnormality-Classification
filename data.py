@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import pandas as pd
-from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+#from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 from sklearn.model_selection import StratifiedShuffleSplit
 from scipy.signal import butter, sosfilt, ShortTimeFFT, get_window
 from PIL import Image
@@ -14,28 +14,12 @@ import gc
 
 # Have to place this outside of the class inorder to use multiprocessing on it
 def process_file(args):
-    index, root_path, f, leads, sos, sft = args
+    index, root_path, f, leads = args
     data = wfdb.rdsamp(os.path.join(root_path, os.path.splitext(f)[0]), channel_names=leads, return_res=32)[0].T
-    filtered = sosfilt(sos, data, axis=-1)
-    spectrogram = sft.spectrogram(filtered, axis=-1)
-    tensor = np.transpose(spectrogram, (1, 2, 0)).astype(np.float32)
-    return [index, tensor]
+    return [index, data]
 
-# Class for creatinng dataset
-class PTBXLDataset(object):
-    def __init__(self, cfg, meta_file, root_path):
-        self.cfg = cfg
-        self.meta_file = meta_file  # Full path to PTBXL database file
-        self.root_path = root_path  # Full path to the dataset folder
-
-        self.dataset = pd.read_json(os.path.join(root_path, meta_file))
-        self.dataset = self.dataset[['filename_lr', 'filename_hr', 'AD']]
-
-        self.leads = ['I', 'II', 'V2']
-        self.classes = ['AD']
-        self.sampling_rate = 100 # or 500
-
-        self.storage_dir = 'ptbxl_tfrecords'
+class Filter():
+    def __init__(self):
 
         # Define the filter
         lowcut = 1.0          # Lower cutoff frequency (Hz)
@@ -59,7 +43,35 @@ class PTBXLDataset(object):
         high = highcut / nyquist
         sos = butter(order, [low, high], btype='band', output='sos')  # Second-order sections
         return sos
-        
+    
+    def apply_filter_spectrogram(self, data):
+        '''
+        Applies the filter and the spectrogram to the 1D data
+        '''
+        filtered = sosfilt(self.sos, data, axis=-1)
+        spectrogram = self.sft.spectrogram(filtered, axis=-1)
+        tensor = np.transpose(spectrogram, (1, 2, 0)).astype(np.float32)
+        return tensor
+    
+# Class for creatinng dataset
+class PTBXLDataset(object):
+    def __init__(self, cfg, meta_file, root_path):
+        self.cfg = cfg
+        self.meta_file = meta_file  # Full path to PTBXL database file
+        self.root_path = root_path  # Full path to the dataset folder
+
+        self.dataset = pd.read_json(os.path.join(root_path, meta_file))
+        self.dataset = self.dataset[['filename_lr', 'filename_hr', 'AD']]
+
+        self.leads = ['I', 'II', 'V2']
+        self.classes = ['AD']
+        self.sampling_rate = 100 # or 500
+
+        self.storage_dir = 'ptbxl_tfrecords'
+
+        self.filter = Filter()
+        self.filter_function = self.filter.apply_filter_spectrogram
+
     def create_splits(self, multilabel=False):
         """
         Creates train, validation, and test splits with stratification.
@@ -69,9 +81,10 @@ class PTBXLDataset(object):
 
         # Choose the appropriate splitter
         if multilabel:
-            splitter = MultilabelStratifiedShuffleSplit(
-                n_splits=1, test_size=self.cfg.TEST_PERCENTAGE, random_state=0
-            )
+            pass
+            # splitter = MultilabelStratifiedShuffleSplit(
+            #     n_splits=1, test_size=self.cfg.TEST_PERCENTAGE, random_state=0
+            # )
         else:
             splitter = StratifiedShuffleSplit(
                 n_splits=1, test_size=self.cfg.TEST_PERCENTAGE, random_state=0
@@ -85,9 +98,10 @@ class PTBXLDataset(object):
 
         # Now split train+validation into train and validation
         if multilabel:
-            splitter = MultilabelStratifiedShuffleSplit(
-                n_splits=1, test_size=self.cfg.VALIDATE_PERCENTAGE / (1 - self.cfg.TEST_PERCENTAGE), random_state=0
-            )
+            pass
+            # splitter = MultilabelStratifiedShuffleSplit(
+            #     n_splits=1, test_size=self.cfg.VALIDATE_PERCENTAGE / (1 - self.cfg.TEST_PERCENTAGE), random_state=0
+            # )
         else:
             splitter = StratifiedShuffleSplit(
                 n_splits=1, test_size=self.cfg.VALIDATE_PERCENTAGE / (1 - self.cfg.TEST_PERCENTAGE), random_state=0
@@ -118,7 +132,7 @@ class PTBXLDataset(object):
         df_files = df.filename_lr if self.sampling_rate == 100 else df.filename_hr
 
         args = [
-            (i, self.root_path, f, self.leads, self.sos, self.sft)
+            (i, self.root_path, f, self.leads)
             for i, f in enumerate(df_files)
         ]
 
@@ -132,26 +146,7 @@ class PTBXLDataset(object):
         labels = df[self.classes].to_numpy().astype(np.int32)
         return data, labels
     
-    def give_raw_dataset(self, mode):
-        '''
-        Creates tensorflow datasets for each  train, validation, and test splits
-        '''
-
-        dataset = None
-        if mode == 'train':
-            dataset = self.train_df
-        elif mode == 'test':
-            dataset = self.test_df
-        elif mode == 'validate':
-            dataset = self.validate_df
-        else:
-            return
-
-        data, labels = self.load_batch(dataset)
-        dataset = tf.data.Dataset.from_tensor_slices((data , labels))
-        return dataset
-    
-    def write_tfrecords(self, dataset, file_prefix):
+    def write_tfrecords(self, dataset: tf.data.Dataset, file_prefix):
         '''
         Input:
             dataset:        tf.Dataset of data to write.
@@ -170,6 +165,60 @@ class PTBXLDataset(object):
                 }
                 example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
                 writer.write(example_proto.SerializeToString())
+
+    def calculate_global_mean_std(self):
+        '''
+        Loads the full dataset to calculate the global mean and std
+        '''
+
+        data, labels = self.load_batch(self.dataset)
+        dataset = tf.data.Dataset.from_tensor_slices((data , labels))
+
+        # Calculate mean and std across the entire dataset
+        def get_mean_and_std(dataset):
+            means = []
+            stds = []
+            for sample, _ in dataset:
+                means.append(tf.math.reduce_mean(sample, axis=(0, 1)))  # Mean across height and width
+                stds.append(tf.math.reduce_std(sample, axis=(0, 1)))    # Std across height and width
+            return tf.math.reduce_mean(means, axis=0), tf.math.reduce_mean(stds, axis=0)
+
+        global_mean, global_std = get_mean_and_std(dataset)
+
+        return global_mean, global_std
+    
+    def create_dataset_from_df(self, df, mean, std, file_prefix):
+        '''
+        Loads a dataset from the file names in a dataframe, applied the normalization to the signal
+            using the mean and std. Applies the filter function, then stores in a TFRecord and writes
+            to disk.
+        '''
+
+        def map_function(data, mean, std):
+            '''Normmalization function'''
+            data = (data - mean) / std
+            data = self.filter_function(data)
+            return data
+
+        data, labels = self.load_batch(df)
+        data = np.array([map_function(d, mean, std) for d in data])
+
+        dataset = tf.data.Dataset.from_tensor_slices((data, labels))
+        self.write_tfrecords(dataset, file_prefix)
+
+    def create_dataset(self):
+        '''
+        Calculates the mean and std of the dataset, then creates each dataset after normalizing, applying
+            the noise filter, and producing the spectrogram.
+        '''
+        mean, std = self.calculate_global_mean_std()
+
+        tf.print(f'Mean: {mean}, Std: {std}')
+
+        self.create_splits()
+        self.create_dataset_from_df(self.train_df, mean, std, 'train')
+        self.create_dataset_from_df(self.test_df, mean, std, 'test')
+        self.create_dataset_from_df(self.validate_df, mean, std, 'validate')
 
     def read_tfrecords(self, file_name, buffer_size=1000):
         '''
@@ -198,32 +247,6 @@ class PTBXLDataset(object):
         dataset = data.map(_parse_function)
 
         return dataset
-    
-    def write_yolo_data(self, tensor_slices, output_dir):
-        '''
-        Input:
-            tensor_slices:  tf.Dataset of (tensor, labels)
-            output_dir:     directory to write images and labels
-        '''
-        # Create directories
-        images_dir = os.path.join(output_dir, "images")
-        labels_dir = os.path.join(output_dir, "labels")
-        os.makedirs(images_dir, exist_ok=True)
-        os.makedirs(labels_dir, exist_ok=True)
-
-        for i, (tensor, label) in enumerate(tensor_slices):
-            # Normalize tensor to [0, 255]
-            normalized_tensor = tf.cast((tensor / tf.reduce_max(tensor)) * 255, tf.uint8)
-
-            # Save the image
-            image_path = os.path.join(images_dir, f"image{i+1}.png")
-            image = Image.fromarray(normalized_tensor.numpy())
-            image.save(image_path)
-
-            # Save the label (binary classification)
-            label_path = os.path.join(labels_dir, f"image{i+1}.txt")
-            with open(label_path, "w") as f:
-                f.write(f"{label}\n")  # YOLO expects the class index
 
 if __name__ == "__main__":
     cfg = config.Configuration()
@@ -232,22 +255,4 @@ if __name__ == "__main__":
 
     dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
 
-    dataset.create_splits()
-
-    validate = dataset.give_raw_dataset(mode='validate')
-    dataset.write_yolo_data(validate, 'val')
-    del validate
-    tf.keras.backend.clear_session()
-    gc.collect()
-
-    train = dataset.give_raw_dataset(mode='train')
-    dataset.write_yolo_data(train, 'train')
-    del train
-    tf.keras.backend.clear_session()
-    gc.collect()
-
-    test = dataset.give_raw_dataset(mode='test')
-    dataset.write_yolo_data(test, 'test')
-    del test
-    tf.keras.backend.clear_session()
-    gc.collect()
+    dataset.create_dataset()
