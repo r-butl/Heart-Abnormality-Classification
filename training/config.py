@@ -1,4 +1,4 @@
-P# Configuration used for training
+# Configuration used for training
 
 class Configuration(object):
 
@@ -11,6 +11,8 @@ class Configuration(object):
 
 	# Training hyperparameters
 	LEARNING_RATE = 1e-4
+	LEARNING_RATE_DECAY = 1
+	LEARNING_RATE_DECAY_STEPS = 500
 	MOMENTUM = 0.9
 	BATCH_SIZE = 128
 	EPOCHS = 50

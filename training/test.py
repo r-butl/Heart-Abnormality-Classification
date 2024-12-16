@@ -100,7 +100,7 @@ if __name__ == '__main__':
 	file_name = 'updated_ptbxl_database.json'
 	root_path = '/home/lrbutler/Desktop/ECGSignalClassifer/ptb-xl/'
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	testset = dataset.read_tfrecords('data_1_label/test_dataset_1_label.tfrecord', buffer_size=64000).batch(1)
+	testset = dataset.read_tfrecords('12_lead_normalized_data_1_label/test.tfrecord', buffer_size=64000).batch(1)
 
 	shape = None
 	for t in testset.take(1):

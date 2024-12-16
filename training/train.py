@@ -31,8 +31,16 @@ class Trainer(object):
 		self.cfg = cfg
 		self.net = net
 
+		# Define learning rate schedule
+		lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+			initial_learning_rate=self.cfg.LEARNING_RATE,  # Use the existing config value
+			decay_steps=self.cfg.LEARNING_RATE_DECAY_STEPS,  # Adjust based on your training steps
+			decay_rate=self.cfg.LEARNING_RATE_DECAY,
+			staircase=True  # If True, learning rate decreases in discrete intervals
+		)
+
 		# Using Adam optimizer
-		self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.cfg.LEARNING_RATE)
+		self.optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
 
 		# Loss function
 		#	For multilabel classification
@@ -129,6 +137,12 @@ class Trainer(object):
 				gradients = tape.gradient(loss, self.net.trainable_weights)
 				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
 
+				# Log learning rate to TensorBoard
+				if tensorboard_writer:
+					current_lr = self.optimizer.learning_rate
+					with tensorboard_writer.as_default():
+						tf.summary.scalar("learning_rate", current_lr, step=self.global_step.numpy())
+			
 			# Compute metrics every epoch
 			val_loss, val_acc = self.calc_metrics_on_dataset(valset)
 
@@ -136,6 +150,7 @@ class Trainer(object):
 				train_loss, train_acc = self.calc_metrics_on_dataset(trainset)
 				self.log_metric_pairs(loss=val_loss, acc=val_acc, var_name='validate', tensorboard_writer=tensorboard_writer, epoch=e)
 				self.log_metric_pairs(loss=train_loss, acc=train_acc, var_name='train', tensorboard_writer=tensorboard_writer, epoch=e)
+
 
 			if self.check_early_stopping(val_loss):
 				break
@@ -163,7 +178,7 @@ if __name__ == '__main__':
 	cfg = Configuration()
 
 	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	train = dataset.read_tfrecords('data_1_label/train_dataset_1_label.tfrecord', buffer_size=64000)
+	train = dataset.read_tfrecords('12_lead_normalized_data_1_label/train.tfrecord', buffer_size=64000)
 	cross_validate = False
 
 	if cross_validate:
@@ -225,7 +240,6 @@ if __name__ == '__main__':
 	else:
 		batch_size = 128
 	
-		
 	# Tensorboard start
 	run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 	log_dir = os.path.join(cfg.LOG_DIR, run_name)
@@ -237,7 +251,7 @@ if __name__ == '__main__':
 	net = AlexNet(cfg=cfg, training=True)
 	trainer = Trainer(cfg=cfg, net=net)
 
-	validate = dataset.read_tfrecords('data_1_label/validate_dataset_1_label.tfrecord', buffer_size=10000)
+	validate = dataset.read_tfrecords('12_lead_normalized_data_1_label/validate.tfrecord', buffer_size=10000)
 
 	# Call train function on trainer class
 	print(trainer.train(trainset=train.batch(batch_size), valset=validate.batch(batch_size), cross_validate=False, tensorboard_writer=tensorboard_writer, epochs=cfg.EPOCHS))

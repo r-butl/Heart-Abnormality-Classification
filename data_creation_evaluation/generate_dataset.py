@@ -15,7 +15,8 @@ import gc
 # Have to place this outside of the class inorder to use multiprocessing on it
 def process_file(args):
     index, root_path, f, leads = args
-    data = wfdb.rdsamp(os.path.join(root_path, os.path.splitext(f)[0]), channel_names=leads, return_res=32)[0].T
+    data = wfdb.rdsamp(os.path.join(root_path, os.path.splitext(f)[0]), return_res=32)[0].T
+    #channel_names=leads,
     return [index, data]
 
 class Filter():

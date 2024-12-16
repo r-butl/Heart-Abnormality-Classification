@@ -12,7 +12,7 @@ class AlexNet(tf.keras.Model):
 		# Convolutional layers 1 to 5
 		conv_init = tf.compat.v1.glorot_normal_initializer()
 		
-		# Adaptive height, width, and channels
+		# Adaptive height, width, and channels 
 		self.conv1 = tf.keras.Sequential([
 			tf.keras.layers.Conv2D(96, 11, 4, 'same', kernel_initializer=conv_init),
 			tf.keras.layers.BatchNormalization(),
