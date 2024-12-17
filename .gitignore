@@ -1,4 +1,5 @@
-__pycache__/
+**/__pycache__
 logs/
 ckpt/
 data_storage/
+training/model.keras

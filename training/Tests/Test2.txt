@@ -1,0 +1,20 @@
+Tue Dec 17 11:02:30 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:30 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:31 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:31 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:32 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:32 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:33 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:33 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:34 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:35 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:36 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:36 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:37 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:37 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:38 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:38 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:39 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:39 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56
+Tue Dec 17 11:02:40 2024: Best Threshold (Youden's Index): 0.8445
+Tue Dec 17 11:02:41 2024: Accuracy: 0.57 | Precision: 0.78 | Recall: 0.44 | F1 Score: 0.56

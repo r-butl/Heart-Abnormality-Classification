@@ -2,7 +2,14 @@
 
 class Configuration(object):
 
-	NUM_CLASSES = 1
+
+	DATABASE_FILE_NAME = 'updated_ptbxl_database.json'
+	ROOT_PATH = '/home/lrbutler/Desktop/ptb-xl/'
+	DATASET_FOLDER = '/home/lrbutler/Desktop/581-final-project/data_storage/dataset_2_label'
+
+	CROSS_VALIDATE = False
+
+	NUM_CLASSES = 2
 
 	# Train/Validate/Text Split
 	TRAIN_PERCENTAGE = 0.70
@@ -11,7 +18,7 @@ class Configuration(object):
 
 	# Training hyperparameters
 	LEARNING_RATE = 1e-4
-	LEARNING_RATE_DECAY = 1
+	LEARNING_RATE_DECAY = 0.98
 	LEARNING_RATE_DECAY_STEPS = 500
 	MOMENTUM = 0.9
 	BATCH_SIZE = 128
@@ -25,10 +32,7 @@ class Configuration(object):
 	# Paths for checkpoint
 	SUMMARY_PATH = 'summary'
 	LOG_DIR = 'logs'
-	OUTPUT_MODEL = 'model.keras'	
-
-	# Prediction Threshold
-	THRESHOLD = 0.5
+	MODEL_FILE = 'model.keras'	
 
 	# Early Stopping Config
 	PATIENCE = 7
