@@ -24,7 +24,6 @@ gpus = tf.config.list_physical_devices('GPU')
 def get_tfrecord_length(dataset):
 	count = 0
 	for d in dataset:
-		assert(d[1][0] != d[1][1])
 		count += 1	
 	return count
 
@@ -53,7 +52,7 @@ class Trainer(object):
 		)
 
 		self.optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
-		self.loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+		self.loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=False)
 		self.global_step = tf.Variable(0, name='global_step', dtype=tf.int64, trainable=False)
 
 	def predict(self, x):
@@ -69,8 +68,7 @@ class Trainer(object):
 		predictions = tf.one_hot(predicted_indices, depth=probabilities.shape[1], dtype=tf.int32)
 		return predictions
 	
-	# Loss calculaions
-	def compute_loss(self, x, y):
+	def compute_loss(self, x, y, training):
 		'''
 		Computes the loss between actual and predicted labels
 		input:
@@ -79,7 +77,7 @@ class Trainer(object):
 		output:
 			loss_value: float
 		'''
-		pred = self.net(x, training=True)		
+		pred = self.net(x, training=training)		
 		loss_value = self.loss_fn(y, pred)
 		return loss_value
 
@@ -114,7 +112,7 @@ class Trainer(object):
 		total_accuracy = 0.0
 		batches = 0
 		for images, labels in dataset:
-			loss = self.compute_loss(images, labels)
+			loss = self.compute_loss(images, labels, training=False)
 			accuracy = self.compute_accuracy(images, labels).numpy()
 			total_loss += loss.numpy()
 			total_accuracy += accuracy
@@ -191,7 +189,7 @@ class Trainer(object):
 				g_step = self.global_step.numpy() + 1
 
 				with tf.GradientTape() as tape:
-					loss = self.compute_loss(sample, labels)
+					loss = self.compute_loss(sample, labels, training=True)
 					
 				gradients = tape.gradient(loss, self.net.trainable_weights)
 				self.optimizer.apply_gradients(zip(gradients, self.net.trainable_weights))
@@ -255,7 +253,7 @@ if __name__ == '__main__':
 		for p in hyperparameters:
 			tf.print(p)
 
-		k_folds = 5
+		k_folds = cfg.K_FOLDS
 		dataset_size = sum(1 for _ in train)  # Calculate the total number of samples
 		fold_size = dataset_size // k_folds  # Calculate the size of each fold
 		fold_config_results = []
@@ -281,7 +279,7 @@ if __name__ == '__main__':
 					trainset=train_dataset.batch(parameters[0]), 
 					valset=val_dataset.batch(parameters[0]), 
 					cross_validate=True, 
-					epochs=5
+					epochs=cfg.MAX_CV_EPOCHS
 					)
 				
 				tf.print(f'Cross validation fold {fold_idx} loss: {fold_val_loss}')

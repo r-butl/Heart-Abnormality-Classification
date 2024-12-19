@@ -31,6 +31,30 @@ class Tester(object):
 		self.net = net
 		self.testset = testset
 
+	def test(self):
+		'''
+		Test the model.
+		'''
+		all_predictions = []
+		all_labels = []
+
+		# Iterate through the test dataset
+		start = time.time()
+		for x_batch, y_batch in self.testset:
+			probabilities = self.net(x_batch, training=False)  # Softmax probabilities
+			normal_probs = probabilities[:, 1]  # Take probabilities for the positive class
+			all_predictions.extend(normal_probs.numpy())  # Collect probabilities
+			all_labels.extend(tf.argmax(y_batch, axis=1).numpy()) 
+		end = time.time()
+		tf.print(f"\n\nRuntime: {round(end - start, 2)} seconds")
+
+		# Convert to numpy arrays
+		all_predictions = np.array(all_predictions)
+		all_labels = np.array(all_labels)
+
+		# Generate ROC Curve and AUC
+		self.find_best_threshold_and_produce_metrics(all_labels, all_predictions)
+
 	def find_best_threshold_and_produce_metrics(self, actual, predicted_probs):
 		"""
 		Sweeps through thresholds to find the best threshold value based on Youden's Index,
@@ -82,7 +106,9 @@ class Tester(object):
 
 		# Calculate Metrics
 		accuracy = accuracy_score(actual, binary_predictions)
+		# Accuracy of of positive predictions
 		precision = np.round(np.sum((binary_predictions == 1) & (actual == 1)) / np.sum(binary_predictions == 1), 2) if np.sum(binary_predictions == 1) > 0 else 0.0
+		# ability to idenitify actual positives
 		recall = np.round(np.sum((binary_predictions == 1) & (actual == 1)) / np.sum(actual == 1), 2) if np.sum(actual == 1) > 0 else 0.0
 		f1 = np.round(2 * (precision * recall) / (precision + recall), 2) if (precision + recall) > 0 else 0.0
 
@@ -90,27 +116,6 @@ class Tester(object):
 		tf.print(f'Accuracy: {accuracy:.2f} | Precision (normal): {precision} | Recall (normal): {recall} | F1 Score (normal): {f1}')
 		
 		return best_threshold, accuracy, precision, recall, f1
-
-	def test(self):
-		all_predictions = []
-		all_labels = []
-
-		# Iterate through the test dataset
-		start = time.time()
-		for x_batch, y_batch in self.testset:
-			probabilities = self.net(x_batch, training=False)  # Softmax probabilities
-			normal_probs = probabilities[:, 1]  # Take probabilities for the positive class
-			all_predictions.extend(normal_probs.numpy())  # Collect probabilities
-			all_labels.extend(tf.argmax(y_batch, axis=1).numpy()) 
-		end = time.time()
-		tf.print(f"\n\nRuntime: {round(end - start, 2)} seconds")
-
-		# Convert to numpy arrays
-		all_predictions = np.array(all_predictions)
-		all_labels = np.array(all_labels)
-
-		# Generate ROC Curve and AUC
-		self.find_best_threshold_and_produce_metrics(all_labels, all_predictions)
 	
 if __name__ == '__main__':
 	i = 0

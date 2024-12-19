@@ -51,7 +51,7 @@ class AlexNet(tf.keras.Model):
 		self.drop2 = tf.keras.layers.Dropout(self.cfg.DROPOUT)
 
 		# Sigmoid for multilabel classification
-		self.out = tf.keras.layers.Dense(self.cfg.NUM_CLASSES, activation='softmax', kernel_initializer=fc_init)
+		self.out = tf.keras.layers.Dense(self.cfg.NUM_CLASSES, activation='sigmoid', kernel_initializer=fc_init)
 
 
 	def call(self, x):
