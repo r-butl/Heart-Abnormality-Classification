@@ -2,4 +2,5 @@
 logs/
 ckpt/
 data_storage/
-training/model.keras
+model.keras
+ptb-xl/

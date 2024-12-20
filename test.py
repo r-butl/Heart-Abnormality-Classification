@@ -3,7 +3,7 @@
 
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../data_creation_evaluation')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 import time
 import numpy as np
@@ -41,10 +41,9 @@ class Tester(object):
 		# Iterate through the test dataset
 		start = time.time()
 		for x_batch, y_batch in self.testset:
-			probabilities = self.net(x_batch, training=False)  # Softmax probabilities
-			normal_probs = probabilities[:, 1]  # Take probabilities for the positive class
-			all_predictions.extend(normal_probs.numpy())  # Collect probabilities
-			all_labels.extend(tf.argmax(y_batch, axis=1).numpy()) 
+			probabilities = self.net(x_batch, training=False)  # Sigmoid probabilities
+			all_predictions.extend(probabilities.numpy().flatten())  # Collect probabilities as-is
+			all_labels.extend(y_batch.numpy())  # Collect true binary labels
 		end = time.time()
 		tf.print(f"\n\nRuntime: {round(end - start, 2)} seconds")
 
@@ -100,7 +99,7 @@ class Tester(object):
 		cm = confusion_matrix(actual, binary_predictions)
 		disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[0, 1])
 		disp.plot(cmap=plt.cm.Blues)
-		plt.title(f'Confusion Matrix at Best Threshold {best_threshold}')
+		plt.title(f'Confusion Matrix at Best Threshold (Normal) {best_threshold:.2f}')
 		plt.grid(False)
 		plt.savefig('Confusion_matrix.png')
 
@@ -134,12 +133,8 @@ if __name__ == '__main__':
 
 	cfg = Configuration()
 
-	file_name = cfg.DATABASE_FILE_NAME
-	root_path = cfg.ROOT_PATH
-	data_set_folder = cfg.DATASET_FOLDER
-
-	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	testset = dataset.read_tfrecords(f'{data_set_folder}/test.tfrecord', buffer_size=64000)
+	dataset = PTBXLDataset(cfg=cfg)
+	testset = dataset.read_tfrecords('test.tfrecord', buffer_size=64000)
 	tf.print(f"\n\nNumber of samples: {get_tfrecord_length(testset)}\n\n")
 	testset = testset.batch(128)
 

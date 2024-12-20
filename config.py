@@ -1,11 +1,13 @@
 # Configuration used for training
+import os
 
 class Configuration(object):
 
-
+	# Data related
+	DATABASE_ROOT_PATH = 'ptb-xl'	# Location of the ptb-xl dataset
 	DATABASE_FILE_NAME = 'updated_ptbxl_database.json'
-	ROOT_PATH = '/home/lrbutler/Desktop/ptb-xl/'
-	DATASET_FOLDER = '/home/lrbutler/Desktop/581-final-project/data_storage/3_lead_data_1_label'
+	DATASET_STORAGE = 'data_storage'
+	DATASET_FOLDER = '3_lead_data_2_label_abnormal_1_label'
 
 	CROSS_VALIDATE = False
 	K_FOLDS=5

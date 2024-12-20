@@ -11,7 +11,7 @@ import tensorflow as tf
 
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../data_creation_evaluation')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 from data import PTBXLDataset
 from config import Configuration
@@ -64,8 +64,7 @@ class Trainer(object):
 			predictions: tf.Tensor in one-hot encoded format
 		"""
 		probabilities = self.net(x)  # Output shape: (batch_size, num_classes)
-		predicted_indices = tf.argmax(probabilities, axis=1)
-		predictions = tf.one_hot(predicted_indices, depth=probabilities.shape[1], dtype=tf.int32)
+		predictions = tf.cast(probabilities > 0.5, dtype=tf.int32)
 		return predictions
 	
 	def compute_loss(self, x, y, training):
@@ -92,10 +91,9 @@ class Trainer(object):
 			accuracy_value: float
 		'''
 
-		probabilities = self.net(x, training=False)
-		y_pred_indices = tf.argmax(probabilities, axis=1)
-		y_true_indices = tf.argmax(y, axis=1)
-		correct_predictions = tf.equal(y_true_indices, y_pred_indices)
+		probabilities = self.net(x, training=False)  # Output shape: (batch_size, 1)
+		predictions = tf.cast(probabilities > 0.5, dtype=tf.int32)
+		correct_predictions = tf.equal(predictions, tf.cast(y, tf.int32))
 		accuracy_value = tf.reduce_mean(tf.cast(correct_predictions, tf.float32))
 		return accuracy_value
 
@@ -229,18 +227,11 @@ if __name__ == '__main__':
 	# Global configuration settings for training and testing
 	cfg = Configuration()
 
-	# File information for loading the data
-	file_name = cfg.DATABASE_FILE_NAME
-	root_path = cfg.ROOT_PATH
-	data_set_folder = cfg.DATASET_FOLDER
-
 	# Loads the dataset
-	dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-	train = dataset.read_tfrecords(f'{data_set_folder}/train.tfrecord', buffer_size=64000)
-	validate = dataset.read_tfrecords(f'{data_set_folder}/validate.tfrecord', buffer_size=10000)
-
+	dataset = PTBXLDataset(cfg=cfg)
+	
+	train = dataset.read_tfrecords('train.tfrecord', buffer_size=64000)
 	tf.print(f"Number of train records: {get_tfrecord_length(train)}")
-	tf.print(f"Number of validate records: {get_tfrecord_length(validate)}")
 
 	cross_validate = cfg.CROSS_VALIDATE
 	if cross_validate:
@@ -306,7 +297,10 @@ if __name__ == '__main__':
 		batch_size = best_hyperparameters[0]
 	else:
 		batch_size = 128
-	
+
+	validate = dataset.read_tfrecords('validate.tfrecord', buffer_size=10000)
+	tf.print(f"Number of validate records: {get_tfrecord_length(validate)}")
+
 	# Tensorboard start
 	run_name = f"run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 	log_dir = os.path.join(cfg.LOG_DIR, run_name)

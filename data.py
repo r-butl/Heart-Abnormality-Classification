@@ -4,6 +4,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import config
 
+import ast
 import tensorflow as tf
 import numpy as np
 import pandas as pd
@@ -13,7 +14,6 @@ from PIL import Image
 import wfdb
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-import gc
 
 # Have to place this outside of the class inorder to use multiprocessing on it
 def process_file(args):
@@ -28,7 +28,7 @@ class Filter():
         lowcut = 1.0          # Lower cutoff frequency (Hz)
         highcut = 45.0        # Upper cutoff frequency (Hz)
         fs = 100.0            # Sampling frequency (Hz)
-        order = 4             # Filter order (higher = steeper rolloff)
+        order = 2             # Filter order (higher = steeper rolloff)
         self.sos = self.design_iir_bandpass(lowcut, highcut, fs, order)
 
         # Define a spectrogram
@@ -58,21 +58,109 @@ class Filter():
     
 # Class for creatinng dataset
 class PTBXLDataset(object):
-    def __init__(self, cfg, meta_file, root_path):
+    def __init__(self, cfg):
         self.cfg = cfg
-        self.meta_file = meta_file  # Full path to PTBXL database file
-        self.root_path = root_path  # Full path to the dataset folder
 
         self.leads = ['I', 'II', 'V2']
-        self.classes = ['NORM',	'ABNORM']
+        self.classes = ['ABNORM']
         self.sampling_rate = 100 # or 500
 
-        self.dataset = pd.read_json(os.path.join(root_path, meta_file))
+        if not os.path.exists(os.path.join(self.cfg.DATABASE_ROOT_PATH, self.cfg.DATABASE_FILE_NAME)):
+            self.create_updated_database_metafile(sampling_rate=self.sampling_rate)
+
+        self.dataset = pd.read_json(os.path.join(self.cfg.DATABASE_ROOT_PATH, self.cfg.DATABASE_FILE_NAME))
+
         self.dataset = self.dataset[['filename_lr', 'filename_hr'] + self.classes]
-        self.storage_folder = '3_lead_data_2_label_abnormal_1'
 
         self.filter = Filter()
         self.filter_function = self.filter.apply_filter_spectrogram
+
+    def create_updated_database_metafile(self, sampling_rate=100):
+        print('Creating updated database metafile...') 
+        files = pd.read_csv(os.path.join(self.cfg.DATABASE_ROOT_PATH, 'ptbxl_database.csv'), index_col='ecg_id')
+        files.scp_codes = files.scp_codes.apply(lambda x: ast.literal_eval(x))
+        files[['age', 'sex', 'height', 'weight', 'scp_codes']].head(20)
+
+        def less_than_100_check(row):
+            codes = row['scp_codes']
+            if 'NORM' in codes and codes['NORM'] < 100:
+                return 1
+            else:
+                return 0
+            
+        removal_mask = files.apply(less_than_100_check, axis=1).values
+        filtered_files = files[removal_mask == 0]
+
+        # Load scp_statements.csv for diagnostic aggregation
+        agg_df = pd.read_csv(os.path.join(self.cfg.DATABASE_ROOT_PATH, 'scp_statements.csv'), index_col=0)
+        agg_df = agg_df[agg_df.diagnostic == 1]
+
+        def aggregate_diagnostic(y_dic):
+            tmp = []
+            for key in y_dic.keys():
+                if key in agg_df.index:
+                    tmp.append(agg_df.loc[key].diagnostic_class)
+            return list(set(tmp))
+
+        # Apply diagnostic superclass
+        filtered_files['diagnostic_superclass'] = filtered_files.scp_codes.apply(aggregate_diagnostic)
+        diagnostic_superclass = filtered_files['diagnostic_superclass'].value_counts()
+        classes = diagnostic_superclass.index
+        counts = diagnostic_superclass.values
+        frame = pd.DataFrame([co for co in zip(classes, counts)], columns=['class', 'counts'])
+
+        def convert_and_check(row):
+            classes = row['class']
+            count = row['counts']
+            if 'NORM' in classes and len(classes) > 1:
+                return 1    # Drop
+            elif len(classes) == 0:
+                return 1
+            elif count < 20:
+                return 1
+            else:
+                return 0
+
+        drop_indices = frame.apply(convert_and_check, axis=1).values
+        filtered_classes = frame[drop_indices == 0]
+
+        def all_values_match(x, y):
+            '''Check if all values in x are in y'''
+            if len(x) != len(y):
+                return 0
+            else:
+                for value in x:
+                    if value not in y:
+                        return 0
+            return 1
+
+        def in_class_list(row):
+            '''Check if the diagnostic superclass is in the filtered classes'''
+            try:
+                for allowable_classes in filtered_classes['class'].values:
+                    if all_values_match(allowable_classes, row['diagnostic_superclass']):
+                        return 1
+                return 0
+            
+            except:
+                print(row['diagnostic_superclass'])
+                print(filtered_classes['class'].values)
+
+        keep_indices = filtered_files.apply(in_class_list, axis=1)
+        filtered_files = filtered_files[keep_indices == 1]
+
+        def is_normal(row):
+            '''Check if the diagnostic superclass is normal'''
+            if 'NORM' in row['diagnostic_superclass']:
+                return 0
+            else:
+                return 1
+            
+        norm_col = filtered_files.apply(is_normal, axis=1)
+
+        filtered_files['ABNORM'] = norm_col
+
+        filtered_files.to_json(os.path.join(self.cfg.DATABASE_ROOT_PATH, self.cfg.DATABASE_FILE_NAME))
 
     def create_splits(self, multilabel=False):
         """
@@ -122,7 +210,7 @@ class PTBXLDataset(object):
         df_files = df.filename_lr if self.sampling_rate == 100 else df.filename_hr
 
         args = [
-            (i, self.root_path, f, self.leads)
+            (i, self.cfg.DATABASE_ROOT_PATH, f, self.leads)
             for i, f in enumerate(df_files)
         ]
 
@@ -175,6 +263,7 @@ class PTBXLDataset(object):
 
         global_mean, global_std = get_mean_and_std(dataset)
 
+        del dataset
         return global_mean, global_std
     
     def normalize(self, dataset: np.array, mean, std):
@@ -202,7 +291,7 @@ class PTBXLDataset(object):
 
         return dataset
 
-    def create_dataset_from_df(self, df, mean, std, file_prefix, normalize=False):
+    def create_dataset_from_df(self, df, mean, std, normalize=False):
         '''
         Loads a dataset from the file names in a dataframe, applied the normalization to the signal
             using the mean and std. Applies the filter function, then stores in a TFRecord and writes
@@ -215,21 +304,36 @@ class PTBXLDataset(object):
             data = self.normalize(data, mean, std)
 
         data = self.apply_filter(data)
-
         dataset = tf.data.Dataset.from_tensor_slices((data, labels))
-        self.write_tfrecords(dataset, file_prefix)
+        return dataset
         
     def create_dataset(self, normalize=False):
         '''
         Calculates the mean and std of the dataset, then creates each dataset after normalizing, applying
             the noise filter, and producing the spectrogram.
         '''
+
+        storage_folder = os.path.join(self.cfg.DATASET_STORAGE, self.cfg.DATASET_FOLDER)
+
+        if not os.path.exists(storage_folder):
+            os.makedirs(storage_folder)
+
         mean, std = self.calculate_global_mean_std()
 
         self.create_splits()
-        self.create_dataset_from_df(self.train_df, mean, std, 'train', normalize=normalize)
-        self.create_dataset_from_df(self.test_df, mean, std, 'test', normalize=normalize)
-        self.create_dataset_from_df(self.validate_df, mean, std, 'validate', normalize=normalize)
+
+        test_dataset = self.create_dataset_from_df(self.test_df, mean, std, normalize=normalize)
+        self.write_tfrecords(test_dataset, os.path.join(storage_folder, 'test'))
+        del test_dataset
+
+        validate_dataset = self.create_dataset_from_df(self.validate_df, mean, std, normalize=normalize)
+        self.write_tfrecords(validate_dataset, os.path.join(storage_folder, 'validate'))
+        del validate_dataset
+
+        train_dataset = self.create_dataset_from_df(self.train_df, mean, std, normalize=normalize)
+        self.write_tfrecords(train_dataset, os.path.join(storage_folder,'train')) 
+        del train_dataset
+
 
     def read_tfrecords(self, file_name, buffer_size=1000):
         '''
@@ -253,16 +357,14 @@ class PTBXLDataset(object):
 
             return sample, label
         
-        dataset = [file_name]
-        data = tf.data.TFRecordDataset(dataset, buffer_size=buffer_size)
+        file_name = os.path.join(os.path.join(os.path.join(os.getcwd(), self.cfg.DATASET_STORAGE), self.cfg.DATASET_FOLDER), file_name)
+        data = tf.data.TFRecordDataset(file_name, buffer_size=buffer_size)
         dataset = data.map(_parse_function)
 
         return dataset
-
+    
 if __name__ == "__main__":
-    file_name = 'updated_ptbxl_database.json'
-    root_path = '/home/lrbutler/Desktop/ptb-xl'
 
     cfg = config.Configuration()
-    dataset = PTBXLDataset(cfg=cfg, meta_file=file_name, root_path=root_path)
-    dataset.create_dataset()
+    dataset = PTBXLDataset(cfg=cfg)
+    dataset.create_dataset(normalize=False)
