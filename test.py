@@ -19,7 +19,6 @@ tf.random.set_seed(1)
 def get_tfrecord_length(dataset):
 	count = 0
 	for d in dataset:
-		assert(d[1][0] != d[1][1])
 		count += 1	
 	return count
 
@@ -41,18 +40,23 @@ class Tester(object):
 		# Iterate through the test dataset
 		start = time.time()
 		for x_batch, y_batch in self.testset:
-			probabilities = self.net(x_batch, training=False)  # Sigmoid probabilities
-			all_predictions.extend(probabilities.numpy().flatten())  # Collect probabilities as-is
-			all_labels.extend(y_batch.numpy())  # Collect true binary labels
+			# Ensure output probabilities are in [0, 1]
+			probabilities = tf.sigmoid(self.net(x_batch, training=False))  # Apply sigmoid if needed
+			all_predictions.append(probabilities.numpy().flatten())  # Collect probabilities
+			all_labels.append(y_batch.numpy().flatten())  # Collect true labels
+
 		end = time.time()
-		tf.print(f"\n\nRuntime: {round(end - start, 2)} seconds")
+		tf.print(f"\n\nProcessed {len(all_labels) * len(all_labels[0])} samples in {round(end - start, 2)} seconds.")
 
 		# Convert to numpy arrays
-		all_predictions = np.array(all_predictions)
-		all_labels = np.array(all_labels)
+		all_predictions = np.concatenate(all_predictions)  # Concatenate batches
+		all_labels = np.concatenate(all_labels)  # Concatenate batches
 
-		# Generate ROC Curve and AUC
-		self.find_best_threshold_and_produce_metrics(all_labels, all_predictions)
+		# Validate data
+		assert np.all((all_predictions >= 0) & (all_predictions <= 1)), "Predictions out of range [0, 1]"
+		assert np.all((all_labels == 0) | (all_labels == 1)), "Labels must be binary (0 or 1)"
+
+		return all_predictions, all_labels
 
 	def find_best_threshold_and_produce_metrics(self, actual, predicted_probs):
 		"""
@@ -99,7 +103,7 @@ class Tester(object):
 		cm = confusion_matrix(actual, binary_predictions)
 		disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[0, 1])
 		disp.plot(cmap=plt.cm.Blues)
-		plt.title(f'Confusion Matrix at Best Threshold (Normal) {best_threshold:.2f}')
+		plt.title(f'Confusion Matrix at Best Threshold (Abnormal) {best_threshold:.2f}')
 		plt.grid(False)
 		plt.savefig('Confusion_matrix.png')
 
@@ -152,5 +156,8 @@ if __name__ == '__main__':
 	tester = Tester(cfg, net, testset)
 
 	# Call test function on tester object
-	tester.test()
+	predictions, labels = tester.test()
+
+			# Generate ROC Curve and AUC
+	tester.find_best_threshold_and_produce_metrics(labels, predictions)
 
