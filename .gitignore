@@ -4,3 +4,4 @@ ckpt/
 data_storage/
 model.keras
 ptb-xl/
+*.png
