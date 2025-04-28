@@ -1,4 +1,4 @@
-This project trainings AlexNet on Spectrograms of ECG signals. It was found that this combination does not produce great results
+This project trains AlexNet on Spectrograms of ECG signals. It was found that this combination of data shape and model does not produce great results.
 
 To get started with this project, first clone this repository and move into the project directory.
 
